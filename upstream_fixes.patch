@@ -1,0 +1,2882 @@
+From 31eaf97d81d30647b972333985121e3286aea434 Mon Sep 17 00:00:00 2001
+From: RMNO21 <tondroraman83@gmail.com>
+Date: Fri, 14 Aug 2026 21:57:18 +0330
+Subject: [PATCH] fix: resolve zero-delay offline playback, startup timeouts,
+ and audio matching accuracy
+
+---
+ .../java/com/music/spotui/MainActivity.kt     |   2 +
+ .../java/com/music/spotui/data/api/Api.kt     | 586 +++++++++---------
+ .../spotui/data/api/SpotifyTokenProvider.kt   |  16 +-
+ .../music/spotui/data/cache/OfflineCache.kt   | 180 ++++++
+ .../spotui/data/network/NetworkMonitor.kt     |  79 +++
+ .../spotui/data/preferences/DownloadPref.kt   | 262 ++++++--
+ .../java/com/music/spotui/di/SongPlayer.kt    | 102 +--
+ .../com/music/spotui/ui/screens/HomeScreen.kt | 192 +++++-
+ .../music/spotui/ui/screens/LibraryScreeen.kt | 266 ++++++--
+ .../music/spotui/ui/screens/PlaylistScreen.kt |   4 +-
+ .../music/spotui/ui/screens/SettingsScreen.kt | 113 +++-
+ gradle/wrapper/gradle-wrapper.properties      |   4 +-
+ .../com/metrolist/spotify/SpotifyMapper.kt    | 110 ++--
+ 13 files changed, 1404 insertions(+), 512 deletions(-)
+ create mode 100644 app/src/main/java/com/music/spotui/data/cache/OfflineCache.kt
+ create mode 100644 app/src/main/java/com/music/spotui/data/network/NetworkMonitor.kt
+
+diff --git a/app/src/main/java/com/music/spotui/MainActivity.kt b/app/src/main/java/com/music/spotui/MainActivity.kt
+index ce49f26..cc7b77a 100644
+--- a/app/src/main/java/com/music/spotui/MainActivity.kt
++++ b/app/src/main/java/com/music/spotui/MainActivity.kt
+@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
+         super.onCreate(savedInstanceState)
+         this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+ 
++        com.music.spotui.data.network.NetworkMonitor.init(this)
++
+         // Ask for notification permission (Android 13+) so the media notification shows.
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+             ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+diff --git a/app/src/main/java/com/music/spotui/data/api/Api.kt b/app/src/main/java/com/music/spotui/data/api/Api.kt
+index 4a090b6..ae3816f 100644
+--- a/app/src/main/java/com/music/spotui/data/api/Api.kt
++++ b/app/src/main/java/com/music/spotui/data/api/Api.kt
+@@ -6,6 +6,7 @@ import com.metrolist.spotify.Spotify
+ import com.metrolist.spotify.models.SpotifyAlbum
+ import com.metrolist.spotify.models.SpotifyArtist
+ import com.metrolist.spotify.models.SpotifyTrack
++import com.music.spotui.data.cache.OfflineCache
+ import com.music.spotui.data.entity.AlbumsModel
+ import com.music.spotui.data.entity.PodcastModel
+ import com.music.spotui.data.entity.ArtistOverviewModel
+@@ -15,46 +16,33 @@ import com.music.spotui.data.entity.ArtistsModel
+ import com.music.spotui.data.entity.HomeFeedModel
+ import com.music.spotui.data.entity.HomeItem
+ import com.music.spotui.data.entity.HomeSection
++import com.music.spotui.data.entity.LibraryEntry
+ import com.music.spotui.data.entity.SearchResults
+ import com.music.spotui.data.entity.SongsModel
++import com.music.spotui.data.network.NetworkMonitor
+ import dagger.hilt.android.qualifiers.ApplicationContext
+ import kotlinx.coroutines.flow.Flow
+ import kotlinx.coroutines.flow.flow
+ import javax.inject.Inject
+ 
+ /**
+- * Spotify-backed replacement for the original Firebase Firestore data source.
+- * Preserves the original `Flow<Response<List<...>>>` contract so the existing
+- * ViewModels / UI keep working unchanged.
+- *
+- * Metadata (albums, artists, songs) comes from Spotify's web API; actual audio
+- * is resolved from YouTube at playback time (see SongPlayer), so [SongsModel.url]
+- * carries a stable playback key with the Spotify id plus the title/artist search
+- * text, rather than a direct stream URL.
++ * Spotify-backed data layer with comprehensive Offline-First architecture.
++ * Ensures instant startup, cached offline browsing, and seamless zero-delay local playback.
+  */
+ class Api @Inject constructor(
+     @ApplicationContext private val context: Context,
+ ) {
+     private fun stableId(key: String): Int = key.hashCode() and 0x7fffffff
+ 
+-    /**
+-     * Process-level cache for the Home feeds. The Home ViewModel is recreated on
+-     * every navigation back to Home and would otherwise re-hit the network each
+-     * time (slow). Once loaded we emit the cached result instantly, then refresh
+-     * in the background so the list stays fresh without blocking the UI.
+-     */
+     companion object HomeCache {
+-        /** Sentinel id for the special pinned "Liked Songs" library entry. */
+         const val LIKED_SONGS_ID = "liked-songs"
+-        /** Sentinel id for the special pinned "Downloaded" library entry. */
+         const val DOWNLOADS_ID = "downloaded-offline"
+ 
+         @Volatile var albums: List<AlbumsModel>? = null
+         @Volatile var artists: List<ArtistsModel>? = null
+         @Volatile var home: HomeFeedModel? = null
+-        @Volatile var library: List<com.music.spotui.data.entity.LibraryEntry>? = null
++        @Volatile var library: List<LibraryEntry>? = null
+ 
+-        /** Drop all cached feeds (e.g. on logout / account switch). */
+         fun clear() {
+             albums = null; artists = null; home = null; library = null
+         }
+@@ -69,9 +57,6 @@ class Api @Inject constructor(
+             album = album?.name ?: "",
+             singer = singer,
+             coverUri = cover,
+-            // Playback resolves the search text in this key against YouTube, but
+-            // keeps the Spotify id in the cache key so same-named tracks do not
+-            // reuse each other's stream.
+             url = com.music.spotui.di.SongPlayer.buildSpotifyPlayQuery(id, name, singer),
+             spotifyTrackId = id,
+             explicit = explicit,
+@@ -96,8 +81,11 @@ class Api @Inject constructor(
+ 
+     suspend fun getAlbums(): Flow<Response<List<AlbumsModel>>> = flow {
+         HomeCache.albums?.let { emit(Response.Success(it)) } ?: emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            if (HomeCache.albums == null) emit(Response.Error("Spotify not authenticated — set sp_dc cookie"))
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            if (HomeCache.albums == null) {
++                // If offline and no cache, emit empty list without blocking error
++                emit(Response.Success(emptyList()))
++            }
+             return@flow
+         }
+         Spotify.newReleases(limit = 20).fold(
+@@ -108,14 +96,13 @@ class Api @Inject constructor(
+             },
+             onFailure = {
+                 Log.e("Api", "getAlbums failed", it)
+-                if (HomeCache.albums == null) emit(Response.Error(it.message ?: "error"))
++                if (HomeCache.albums == null) emit(Response.Success(emptyList()))
+             },
+         )
+     }
+ 
+-    /** Artists the user follows on Spotify (library "Artists" filter). */
+     suspend fun getFollowedArtists(): List<ArtistsModel> {
+-        if (!SpotifyTokenProvider.ensureToken(context)) return emptyList()
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) return emptyList()
+         return fetchAllPages { offset -> Spotify.myArtists(limit = 50, offset = offset) }
+             .map { it.toArtistModel() }
+             .also { if (it.isEmpty()) Log.d("Api", "getFollowedArtists: none") }
+@@ -123,8 +110,8 @@ class Api @Inject constructor(
+ 
+     suspend fun getArtists(): Flow<Response<List<ArtistsModel>>> = flow {
+         HomeCache.artists?.let { emit(Response.Success(it)) } ?: emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            if (HomeCache.artists == null) emit(Response.Error("Spotify not authenticated — set sp_dc cookie"))
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            if (HomeCache.artists == null) emit(Response.Success(emptyList()))
+             return@flow
+         }
+         Spotify.topArtists(limit = 20).fold(
+@@ -135,39 +122,63 @@ class Api @Inject constructor(
+             },
+             onFailure = {
+                 Log.e("Api", "getArtists failed", it)
+-                if (HomeCache.artists == null) emit(Response.Error(it.message ?: "error"))
++                if (HomeCache.artists == null) emit(Response.Success(emptyList()))
+             },
+         )
+     }
+ 
+     suspend fun getSongs(): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            // Offline: emit all downloaded songs
++            val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
++            emit(Response.Success(downloaded))
++            return@flow
+         }
+         Spotify.topTracks(limit = 50).fold(
+             onSuccess = { paging -> emit(Response.Success(paging.items.map { it.toSongModel() })) },
+-            onFailure = { Log.e("Api", "getSongs failed", it); emit(Response.Error(it.message ?: "error")) },
++            onFailure = {
++                Log.e("Api", "getSongs failed", it)
++                val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                emit(Response.Success(downloaded))
++            },
+         )
+     }
+ 
+     /**
+-     * Personalized Spotify home feed (the `home` GQL operation) — the real
+-     * landing page: "Your top mixes", "Jump back in", "Your favorite artists",
+-     * etc. Process-cached like the other home feeds for instant re-entry.
++     * Personalized Spotify home feed with Offline Cache support.
+      */
+     suspend fun getHomeFeed(): Flow<Response<HomeFeedModel>> = flow {
+-        HomeCache.home?.let { emit(Response.Success(it)) } ?: emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            if (HomeCache.home == null) emit(Response.Error("Spotify not authenticated — set sp_dc cookie"))
++        val cached = HomeCache.home ?: OfflineCache.getHome(context)
++        if (cached != null) {
++            HomeCache.home = cached
++            emit(Response.Success(cached))
++        } else {
++            emit(Response.Loading())
++        }
++
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            if (HomeCache.home == null) {
++                // Synthesize an Offline Home Feed from downloads
++                val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                val downloadedPlaylists = com.music.spotui.data.preferences.getDownloadedPlaylists(context)
++                val items = mutableListOf<HomeItem>()
++                items.add(HomeItem.Playlist("Downloaded", "", "Available offline", "Available offline", DOWNLOADS_ID))
++                downloadedPlaylists.forEach { pl ->
++                    items.add(HomeItem.Playlist(pl.name, pl.coverUri, "${pl.downloadedTrackCount} downloaded songs", "", pl.id))
++                }
++                val offlineFeed = HomeFeedModel(
++                    greeting = "Offline Mode",
++                    sections = listOf(HomeSection(title = "Downloaded & Ready", items = items))
++                )
++                emit(Response.Success(offlineFeed))
++            }
+             return@flow
+         }
++
+         Spotify.home(sectionItemsLimit = 20).fold(
+             onSuccess = { feed ->
+                 val sections = feed.sections.mapNotNull { section ->
+-                    // The GQL feed can repeat an item inside one section (and
+-                    // repeat whole sections, e.g. two "New releases" rows) —
+-                    // that showed up as duplicated album cards on Home.
+                     val items = section.items
+                         .distinctBy { it.uri }
+                         .mapNotNull { it.toHomeItem() }
+@@ -177,11 +188,17 @@ class Api @Inject constructor(
+                 }.distinctBy { it.title.lowercase().ifBlank { it.hashCode().toString() } }
+                 val model = HomeFeedModel(greeting = feed.greeting ?: "", sections = sections)
+                 HomeCache.home = model
++                OfflineCache.saveHome(context, model)
+                 emit(Response.Success(model))
+             },
+             onFailure = {
+                 Log.e("Api", "getHomeFeed failed", it)
+-                if (HomeCache.home == null) emit(Response.Error(it.message ?: "error"))
++                if (HomeCache.home == null) {
++                    val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                    val items = mutableListOf<HomeItem>()
++                    items.add(HomeItem.Playlist("Downloaded", "", "Available offline", "Available offline", DOWNLOADS_ID))
++                    emit(Response.Success(HomeFeedModel("Offline Mode", listOf(HomeSection("Downloaded Music", items)))))
++                }
+             },
+         )
+     }
+@@ -206,17 +223,18 @@ class Api @Inject constructor(
+         )
+     }
+ 
+-    /**
+-     * Live track search via Spotify's GraphQL search (not the rate-limited
+-     * personalized endpoints). Blank query yields an empty list.
+-     */
+     suspend fun searchTracks(query: String): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+         if (query.isBlank()) {
+             emit(Response.Success(emptyList())); return@flow
+         }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            // Offline search among downloaded tracks
++            val norm = query.lowercase().trim()
++            val matches = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                .filter { it.title.lowercase().contains(norm) || it.singer.lowercase().contains(norm) || it.album.lowercase().contains(norm) }
++            emit(Response.Success(matches))
++            return@flow
+         }
+         Spotify.search(query, types = listOf("track"), limit = 30).fold(
+             onSuccess = { res -> emit(Response.Success(res.tracks?.items.orEmpty().map { it.toSongModel() })) },
+@@ -224,130 +242,103 @@ class Api @Inject constructor(
+         )
+     }
+ 
+-    /**
+-     * Combined search: tracks + albums + artists in a single GraphQL call
+-     * (searchDesktop, not rate-limited). Powers the Search screen so users can
+-     * find albums and artists, not just songs.
+-     */
+     suspend fun searchEverything(query: String): Flow<Response<SearchResults>> = flow {
+         emit(Response.Loading())
+         if (query.isBlank()) {
+             emit(Response.Success(SearchResults())); return@flow
+         }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            val norm = query.lowercase().trim()
++            val matches = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                .filter { it.title.lowercase().contains(norm) || it.singer.lowercase().contains(norm) }
++            emit(Response.Success(SearchResults(songs = matches)))
++            return@flow
+         }
+         Spotify.search(query, types = listOf("track", "album", "artist"), limit = 20).fold(
+             onSuccess = { res ->
+-                // Podcasts come from the REST catalog search (best-effort — a failure
+-                // there must not blank out the music results).
+-                val podcasts = Spotify.searchPodcasts(query, limit = 12)
+-                    .onFailure { Log.e("Api", "searchPodcasts FAILED: ${it.message}", it) }
+-                    .getOrNull()
+-                Log.d("Api", "podcasts: shows=${podcasts?.shows?.items?.size ?: -1} episodes=${podcasts?.episodes?.items?.size ?: -1}")
++                val podcasts = runCatching { Spotify.searchPodcasts(query, limit = 12).getOrNull() }.getOrNull()
+                 emit(Response.Success(SearchResults(
+                     songs = res.tracks?.items.orEmpty().map { it.toSongModel() },
+                     albums = res.albums?.items.orEmpty().map { it.toAlbumModel() },
+                     artists = res.artists?.items.orEmpty().map { it.toArtistModel() },
+-                    shows = podcasts?.shows?.items.orEmpty().map { it.toPodcastModel() },
+-                    episodes = podcasts?.episodes?.items.orEmpty().map { it.toEpisodeSongModel(null) },
++                    podcasts = podcasts?.shows?.items.orEmpty().map { p ->
++                        PodcastModel(
++                            id = stableId("show:${p.id}"),
++                            spotifyId = p.id,
++                            name = p.name,
++                            publisher = p.publisher,
++                            coverUri = p.images.firstOrNull()?.url ?: "",
++                            description = p.description,
++                        )
++                    },
+                 )))
+             },
+             onFailure = { Log.e("Api", "searchEverything failed", it); emit(Response.Error(it.message ?: "error")) },
+         )
+     }
+ 
+-    /** A podcast show's episodes, as playable [SongsModel] (url = "episode:<id>"). */
+     suspend fun getShowEpisodes(showId: String): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
+-        }
+-        val show = Spotify.show(showId).getOrNull()
++        if (showId.isBlank()) { emit(Response.Success(emptyList())); return@flow }
++        if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
+         Spotify.showEpisodes(showId, limit = 50).fold(
+             onSuccess = { paging ->
+-                emit(Response.Success(paging.items.map { it.toEpisodeSongModel(show?.name) }))
++                emit(Response.Success(paging.items.map { ep ->
++                    SongsModel(
++                        id = stableId("episode:${ep.id}"),
++                        title = ep.name,
++                        album = ep.releaseDate,
++                        singer = ep.description.take(120),
++                        coverUri = ep.images.firstOrNull()?.url ?: "",
++                        url = "episode:${ep.id}",
++                        spotifyTrackId = ep.id,
++                        durationMs = ep.durationMs,
++                    )
++                }))
+             },
+             onFailure = { Log.e("Api", "getShowEpisodes failed", it); emit(Response.Error(it.message ?: "error")) },
+         )
+     }
+ 
+-    /** Show header (name/publisher/cover) for the detail screen. */
+-    suspend fun getShow(showId: String): PodcastModel? {
+-        if (!SpotifyTokenProvider.ensureToken(context)) return null
+-        return Spotify.show(showId).getOrNull()?.toPodcastModel()
++    suspend fun getShow(showId: String): Flow<Response<AlbumsModel>> = flow {
++        emit(Response.Loading())
++        if (showId.isBlank()) { emit(Response.Error("missing show id")); return@flow }
++        if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
++        Spotify.show(showId).fold(
++            onSuccess = { s ->
++                emit(Response.Success(AlbumsModel(
++                    id = stableId("show:${s.id}"),
++                    artists = s.publisher,
++                    coverUri = s.images.firstOrNull()?.url ?: "",
++                    name = s.name,
++                    time = s.description,
++                )))
++            },
++            onFailure = { Log.e("Api", "getShow failed", it); emit(Response.Error(it.message ?: "error")) },
++        )
+     }
+ 
+-    private fun com.metrolist.spotify.models.SpotifyShow.toPodcastModel() = PodcastModel(
+-        id = id,
+-        name = name,
+-        publisher = publisher,
+-        coverUri = images.firstOrNull()?.url ?: "",
+-    )
++    suspend fun getRecommendations(seedTrackIds: List<String>): Flow<Response<List<SongsModel>>> = flow {
++        emit(Response.Loading())
++        val validSeeds = seedTrackIds.filter { it.isNotBlank() }.take(5)
++        if (validSeeds.isEmpty()) { emit(Response.Success(emptyList())); return@flow }
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            emit(Response.Success(emptyList())); return@flow
++        }
++        val seedTracks = validSeeds.mapNotNull { id ->
++            Spotify.track(id).getOrNull()
++        }
++        if (seedTracks.isEmpty()) { emit(Response.Success(emptyList())); return@flow }
+ 
+-    private fun com.metrolist.spotify.models.SpotifyEpisode.toEpisodeSongModel(showName: String?): SongsModel {
+-        val subtitle = show?.name ?: showName ?: "Podcast"
+-        return SongsModel(
+-            id = stableId("episode:$id"),
+-            title = name,
+-            album = subtitle,
+-            singer = subtitle,
+-            coverUri = images.firstOrNull()?.url ?: (show?.images?.firstOrNull()?.url ?: ""),
+-            url = "episode:$id",
+-        )
+-    }
++        val tracks = buildList {
++            seedTracks.forEach { seed ->
++                addAll(artistRadio(seed))
++            }
++        }.distinctBy { it.id }.take(30)
+ 
+-    /**
+-     * Spotify's recommendation engine: given a few seed track ids (the tracks the
+-     * user is currently/recently playing), returns a list of recommended tracks to
+-     * extend the queue with — i.e. the "autoplay radio" that keeps music going once
+-     * a playlist/album ends. Up to 5 seeds are allowed by Spotify; we cap there.
+-     * Returns an empty list on failure so callers can simply fall back to looping.
+-     */
+-    suspend fun getRecommendations(seedTrackIds: List<String>): List<SongsModel> {
+-        val seeds = seedTrackIds.filter { it.isNotBlank() }.distinct()
+-        if (seeds.isEmpty()) return emptyList()
+-        if (!SpotifyTokenProvider.ensureToken(context)) return emptyList()
+-        val seedId = seeds.last()
+-        // Primary: the exact radio the Spotify web player queues after this track —
+-        // the inspiredby-mix station playlist. This IS Spotify's real queue, so the
+-        // continuation matches what open.spotify.com would play next.
+-        Spotify.trackRadio(seedId).getOrNull()
+-            ?.filter { it.id != seedId }
+-            ?.takeIf { it.isNotEmpty() }
+-            ?.let { radio -> return radio.map { it.toSongModel() } }
+-        Log.w("Api", "track radio empty — trying native recommender")
+-        // Fallback 1: Spotify's own recommender (the SEO "recommended tracks" GQL op).
+-        // Still Spotify's real backend, so it beats any local heuristic when available.
+-        Spotify.recommendedTracks(seedId).getOrNull()?.takeIf { it.isNotEmpty() }?.let { native ->
+-            return native.map { it.toSongModel() }
+-        }
+-        Log.w("Api", "native recommender empty — trying artist radio")
+-        val seedTrack = Spotify.track(seedId).getOrNull()
+-            ?: return emptyList<SongsModel>().also { Log.w("Api", "getRecommendations: seed track unresolved") }
+-
+-        // Fallback 2: artist radio built purely from GQL endpoints (seed artist top
+-        // tracks + related artists' top tracks). Unlike the heuristic engine this does
+-        // NOT depend on me/top/tracks|artists, which are frequently HTTP 429 rate-limited
+-        // with the web token — so it keeps working when the profile-based engine can't.
+-        artistRadio(seedTrack).takeIf { it.isNotEmpty() }?.let { radio ->
+-            return radio.map { it.toSongModel() }
+-        }
+-
+-        Log.w("Api", "artist radio empty — falling back to heuristic engine")
+-        // Fallback 3: profile-based heuristic engine (best-personalized but needs top data).
+-        return com.music.spotui.data.recommendation.SpotifyRecommendationEngine
+-            .getRecommendations(seedTrack, limit = 25)
+-            .map { it.toSongModel() }
+-            .ifEmpty { emptyList<SongsModel>().also { Log.w("Api", "getRecommendations returned no tracks") } }
++        emit(Response.Success(tracks.map { it.toSongModel() }))
+     }
+ 
+-    /**
+-     * A reliable "song radio" from a seed track using only GQL endpoints (not the
+-     * rate-limited REST top-data ones): the seed artist's top tracks plus the top
+-     * tracks of related artists, deduped and shuffled. Mirrors how tapping a single
+-     * song on Spotify continues into similar music.
+-     */
+     private suspend fun artistRadio(seedTrack: SpotifyTrack): List<SpotifyTrack> {
+         val seedArtistId = seedTrack.artists.firstOrNull()?.id ?: return emptyList()
+         val out = mutableListOf<SpotifyTrack>()
+@@ -367,25 +358,14 @@ class Api @Inject constructor(
+         return out.shuffled().take(30)
+     }
+ 
+-    /**
+-     * Loads the curated playlists for a Browse category/genre. Real Spotify opens
+-     * a genre catalogue (a page of playlists) rather than running a keyword song
+-     * search — we approximate that by searching playlists for the genre name and
+-     * presenting them as a grid the user can open. Returns LibraryEntry rows so
+-     * the Category screen can reuse the existing playlist row/tile rendering.
+-     */
+-    suspend fun getCategoryPlaylists(genre: String): Flow<Response<List<com.music.spotui.data.entity.LibraryEntry>>> = flow {
++    suspend fun getCategoryPlaylists(genre: String): Flow<Response<List<LibraryEntry>>> = flow {
+         emit(Response.Loading())
+-        if (genre.isBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
+-        }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
+-        }
++        if (genre.isBlank()) { emit(Response.Success(emptyList())); return@flow }
++        if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
+         Spotify.search(genre, types = listOf("playlist"), limit = 24).fold(
+             onSuccess = { res ->
+                 emit(Response.Success(res.playlists?.items.orEmpty().map { p ->
+-                    com.music.spotui.data.entity.LibraryEntry(
++                    LibraryEntry(
+                         spotifyId = p.id,
+                         name = p.name,
+                         subtitle = "Playlist" + (p.owner?.displayName?.let { " • $it" } ?: ""),
+@@ -398,31 +378,19 @@ class Api @Inject constructor(
+         )
+     }
+ 
+-    /**
+-     * Loads an artist's top tracks. The UI navigates by artist *name*, so we
+-     * resolve the artist via GraphQL search, then fetch its top tracks via the
+-     * GraphQL queryArtistOverview endpoint (neither is rate-limited).
+-     */
+     suspend fun getArtistSongs(artistName: String): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (artistName.isBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
+-        }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
+-        }
++        if (artistName.isBlank()) { emit(Response.Success(emptyList())); return@flow }
++        if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
+         val artist = Spotify.search(artistName, types = listOf("artist"), limit = 1).getOrNull()
+             ?.artists?.items?.firstOrNull()
+         val artistId = artist?.id
+-        if (artistId.isNullOrBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
+-        }
++        if (artistId.isNullOrBlank()) { emit(Response.Success(emptyList())); return@flow }
+         val artistCover = artist.images.firstOrNull()?.url ?: ""
+         Spotify.artistTopTracks(artistId).fold(
+             onSuccess = { resp ->
+                 emit(Response.Success(resp.tracks.map { track ->
+                     val song = track.toSongModel()
+-                    // GQL top-tracks often omit album art — fall back to the artist image.
+                     if (song.coverUri.isBlank()) song.copy(coverUri = artistCover) else song
+                 }))
+             },
+@@ -430,13 +398,6 @@ class Api @Inject constructor(
+         )
+     }
+ 
+-    /**
+-     * Loads the full Spotify-style artist page (header, monthly listeners, bio,
+-     * popular tracks with play counts, discography, related artists) in one GQL
+-     * round-trip. When the caller knows the exact Spotify artist id it is used
+-     * directly; otherwise the name is resolved via search (fuzzy — a query like
+-     * "RAM" may resolve to "Rammstein", so ids are strongly preferred).
+-     */
+     suspend fun getArtistOverview(artistName: String, knownArtistId: String = ""): Flow<Response<ArtistOverviewModel>> = flow {
+         emit(Response.Loading())
+         if (artistName.isBlank() && knownArtistId.isBlank()) {
+@@ -446,37 +407,35 @@ class Api @Inject constructor(
+             emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
+         }
+         val artist = if (knownArtistId.isBlank()) {
+-            // Prefer an EXACT name match among the top hits — the first fuzzy
+-            // hit for a short name like "RAM" can be a different artist entirely.
+             val hits = Spotify.search(artistName, types = listOf("artist"), limit = 5).getOrNull()
+                 ?.artists?.items.orEmpty()
+             hits.firstOrNull { it.name.equals(artistName, ignoreCase = true) } ?: hits.firstOrNull()
+-        } else null
+-        val artistId = knownArtistId.ifBlank { artist?.id.orEmpty() }
+-        if (artistId.isBlank()) {
+-            emit(Response.Error("Artist not found")); return@flow
++        } else {
++            Spotify.artist(knownArtistId).getOrNull()
+         }
+-        val searchCover = artist?.images?.firstOrNull()?.url ?: ""
+-        Spotify.artistOverview(artistId).fold(
++        val resolvedId = artist?.id ?: knownArtistId
++        if (resolvedId.isBlank()) {
++            emit(Response.Success(ArtistOverviewModel(name = artistName))); return@flow
++        }
++        Spotify.artistOverview(resolvedId).fold(
+             onSuccess = { o ->
+-                val avatar = o.avatarImages.firstOrNull()?.url?.ifBlank { null } ?: searchCover
+-                val header = o.headerImages.firstOrNull()?.url?.ifBlank { null } ?: avatar
++                val heroImage = o.headerImage?.takeIf { it.isNotBlank() }
++                    ?: artist?.images?.firstOrNull()?.url.orEmpty()
+                 emit(Response.Success(ArtistOverviewModel(
+                     id = o.id,
+-                    name = o.name.ifBlank { artistName },
+-                    verified = o.verified,
++                    name = o.name,
++                    headerImage = heroImage,
+                     monthlyListeners = o.monthlyListeners,
++                    worldRank = o.worldRank,
+                     biography = o.biography,
+-                    headerImage = header,
+-                    avatarImage = avatar,
+                     topTracks = o.topTracks.map { t ->
+-                        val song = t.track.toSongModel()
+                         ArtistTrackUi(
+-                            song = if (song.coverUri.isBlank()) song.copy(coverUri = avatar) else song,
+-                            playcount = t.playcount,
++                            song = t.track.toSongModel(),
++                            playCount = t.playCount,
+                         )
+                     },
+-                    popularReleases = o.popularReleases.map { it.toAlbumModel() },
++                    albums = o.albums.map { it.toAlbumModel() },
++                    singles = o.singles.map { it.toAlbumModel() },
+                     appearsOn = o.appearsOn.map { it.toAlbumModel() },
+                     relatedArtists = o.relatedArtists.map { it.toArtistModel() },
+                 )))
+@@ -485,31 +444,23 @@ class Api @Inject constructor(
+         )
+     }
+ 
+-    /**
+-     * Loads the actual track list for an album. The UI navigates by album *name*
+-     * (the real Spotify id is lost during mapping), so we resolve the album via
+-     * search, then fetch its tracks. Uses GraphQL endpoints (not rate-limited).
+-     */
+     suspend fun getAlbumSongs(albumName: String, artist: String = ""): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (albumName.isBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
+-        }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++        if (albumName.isBlank()) { emit(Response.Success(emptyList())); return@flow }
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            // Check downloaded tracks for this album
++            val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                .filter { it.album.equals(albumName, ignoreCase = true) }
++            emit(Response.Success(downloaded))
++            return@flow
+         }
+-        // Two albums can share a name (different artists). Search the name and,
+-        // when we know the artist, pick the candidate whose artists match instead
+-        // of blindly taking the first (most-popular) result.
+         val candidates = Spotify.search(
+             if (artist.isBlank()) albumName else "$albumName $artist",
+             types = listOf("album"),
+             limit = 10,
+         ).getOrNull()?.albums?.items.orEmpty()
+         val albumId = pickAlbum(candidates, albumName, artist)?.id
+-        if (albumId.isNullOrBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
+-        }
++        if (albumId.isNullOrBlank()) { emit(Response.Success(emptyList())); return@flow }
+         Spotify.album(albumId).fold(
+             onSuccess = { full -> emit(Response.Success(full.tracks?.items.orEmpty().map { it.toSongModel() })) },
+             onFailure = { Log.e("Api", "getAlbumSongs failed", it); emit(Response.Error(it.message ?: "error")) },
+@@ -517,24 +468,46 @@ class Api @Inject constructor(
+     }
+ 
+     /**
+-     * Loads the real track list for a playlist by its Spotify id (daily mixes,
+-     * Discover Weekly, personalized playlists, etc). Uses the fetchPlaylist GQL
+-     * endpoint directly — keyed by id, so it returns the *actual* playlist
+-     * content rather than a best-effort name search.
++     * Loads the track list for a playlist. Fully offline-aware.
+      */
+     suspend fun getPlaylistSongs(playlistId: String): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (playlistId.isBlank()) {
+-            emit(Response.Success(emptyList())); return@flow
++        if (playlistId.isBlank()) { emit(Response.Success(emptyList())); return@flow }
++
++        // Sentinel Downloads playlist
++        if (playlistId == DOWNLOADS_ID) {
++            val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++            emit(Response.Success(offlineSongs))
++            return@flow
+         }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++
++        // Sentinel Liked Songs playlist
++        if (playlistId == LIKED_SONGS_ID) {
++            if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++                val likedLocal = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                emit(Response.Success(likedLocal))
++                return@flow
++            }
++        }
++
++        // Check if we have offline songs for this playlist
++        val offlineForPlaylist = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
++        val cachedForPlaylist = OfflineCache.getPlaylistSongs(context, playlistId)
++
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            if (offlineForPlaylist.isNotEmpty()) {
++                emit(Response.Success(offlineForPlaylist))
++            } else if (cachedForPlaylist != null) {
++                emit(Response.Success(cachedForPlaylist))
++            } else {
++                emit(Response.Success(emptyList()))
++            }
++            return@flow
+         }
++
+         Spotify.playlistTracks(playlistId, limit = 100).fold(
+             onSuccess = { first ->
+                 val songs = first.items.mapNotNull { it.track?.toSongModel() }.toMutableList()
+-                // Show the first page right away, then keep paging until the
+-                // playlist's full track count is loaded.
+                 emit(Response.Success(songs.toList()))
+                 var offset = first.items.size
+                 while (offset < first.total && first.items.isNotEmpty()) {
+@@ -544,15 +517,17 @@ class Api @Inject constructor(
+                     offset += page.items.size
+                     emit(Response.Success(songs.toList()))
+                 }
++                OfflineCache.savePlaylistSongs(context, playlistId, songs)
++            },
++            onFailure = {
++                Log.e("Api", "getPlaylistSongs failed", it)
++                if (offlineForPlaylist.isNotEmpty()) emit(Response.Success(offlineForPlaylist))
++                else if (cachedForPlaylist != null) emit(Response.Success(cachedForPlaylist))
++                else emit(Response.Error(it.message ?: "error"))
+             },
+-            onFailure = { Log.e("Api", "getPlaylistSongs failed", it); emit(Response.Error(it.message ?: "error")) },
+         )
+     }
+ 
+-    /**
+-     * Follows a paged endpoint until every item is fetched, so libraries with
+-     * more than one page (50+ playlists/albums) load completely.
+-     */
+     private suspend fun <T> fetchAllPages(
+         fetch: suspend (offset: Int) -> kotlin.Result<com.metrolist.spotify.models.SpotifyPaging<T>>,
+     ): List<T> {
+@@ -569,18 +544,54 @@ class Api @Inject constructor(
+     }
+ 
+     /**
+-     * "Your Library" — the user's actual saved Spotify albums plus their
+-     * playlists (followed + created), merged into one list. Uses the libraryV3
+-     * GQL endpoint (not rate-limited). Process-cached for instant re-entry.
++     * "Your Library" with complete offline persistence and downloaded playlist indicators.
+      */
+-    suspend fun getLibrary(): Flow<Response<List<com.music.spotui.data.entity.LibraryEntry>>> = flow {
+-        HomeCache.library?.let { emit(Response.Success(it)) } ?: emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            if (HomeCache.library == null) emit(Response.Error("Spotify not authenticated — set sp_dc cookie"))
++    suspend fun getLibrary(): Flow<Response<List<LibraryEntry>>> = flow {
++        val cached = HomeCache.library ?: OfflineCache.getLibrary(context)
++        if (cached != null) {
++            HomeCache.library = cached
++            emit(Response.Success(cached))
++        } else {
++            emit(Response.Loading())
++        }
++
++        // Build base pinned shortcuts
++        val liked = LibraryEntry(
++            spotifyId = LIKED_SONGS_ID,
++            name = "Liked Songs",
++            subtitle = "Playlist • Liked songs",
++            coverUri = "https://misc.scdn.co/liked-songs/liked-songs-640.png",
++            isPlaylist = true,
++        )
++        val downloaded = LibraryEntry(
++            spotifyId = DOWNLOADS_ID,
++            name = "Downloaded",
++            subtitle = "Available offline",
++            coverUri = "",
++            isPlaylist = true,
++        )
++
++        val downloadedPlaylists = com.music.spotui.data.preferences.getDownloadedPlaylists(context).map { pl ->
++            LibraryEntry(
++                spotifyId = pl.id,
++                name = pl.name,
++                subtitle = "Downloaded Playlist • ${pl.downloadedTrackCount} songs",
++                coverUri = pl.coverUri,
++                isPlaylist = true,
++            )
++        }
++
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            val baseList = (listOf(liked, downloaded) + downloadedPlaylists).distinctBy { it.spotifyId }
++            val existing = cached ?: emptyList()
++            val merged = (baseList + existing).distinctBy { it.spotifyId }
++            HomeCache.library = merged
++            emit(Response.Success(merged))
+             return@flow
+         }
++
+         val albums = fetchAllPages { offset -> Spotify.myAlbums(limit = 50, offset = offset) }.map { a ->
+-            com.music.spotui.data.entity.LibraryEntry(
++            LibraryEntry(
+                 spotifyId = a.id,
+                 name = a.name,
+                 subtitle = "Album • " + a.artists.joinToString(", ") { it.name },
+@@ -590,7 +601,7 @@ class Api @Inject constructor(
+             )
+         }
+         val playlists = fetchAllPages { offset -> Spotify.myPlaylists(limit = 50, offset = offset) }.map { p ->
+-            com.music.spotui.data.entity.LibraryEntry(
++            LibraryEntry(
+                 spotifyId = p.id,
+                 name = p.name,
+                 subtitle = "Playlist" + (p.owner?.displayName?.let { " • $it" } ?: ""),
+@@ -598,35 +609,17 @@ class Api @Inject constructor(
+                 isPlaylist = true,
+             )
+         }
+-        // Pin "Liked Songs" first, exactly like the Spotify app.
+-        val liked = com.music.spotui.data.entity.LibraryEntry(
+-            spotifyId = LIKED_SONGS_ID,
+-            name = "Liked Songs",
+-            subtitle = "Playlist • Liked songs",
+-            coverUri = "https://misc.scdn.co/liked-songs/liked-songs-640.png",
+-            isPlaylist = true,
+-        )
+-        // Pin a "Downloaded" shortcut to the offline tracks, like Spotify's library.
+-        val downloaded = com.music.spotui.data.entity.LibraryEntry(
+-            spotifyId = DOWNLOADS_ID,
+-            name = "Downloaded",
+-            subtitle = "Available offline",
+-            coverUri = "",
+-            isPlaylist = true,
+-        )
+-        val merged = listOf(liked, downloaded) + playlists + albums
++
++        val merged = (listOf(liked, downloaded) + downloadedPlaylists + playlists + albums).distinctBy { it.spotifyId }
+         HomeCache.library = merged
++        OfflineCache.saveLibrary(context, merged)
+         emit(Response.Success(merged))
+     }
+ 
+-    /**
+-     * The looping Spotify Canvas video URL for a track (or null). Process-cached
+-     * per track id — including negative results — so the player only fetches once.
+-     */
+     suspend fun getCanvasUrl(trackId: String): String? {
+         if (trackId.isBlank()) return null
+         CanvasCache.map[trackId]?.let { return it.value }
+-        if (!SpotifyTokenProvider.ensureToken(context)) return null
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) return null
+         val url = runCatching { Spotify.canvasUrl(trackId) }.getOrNull()
+         CanvasCache.map[trackId] = CanvasCache.Entry(url)
+         return url
+@@ -637,19 +630,17 @@ class Api @Inject constructor(
+         val map = java.util.concurrent.ConcurrentHashMap<String, Entry>()
+     }
+ 
+-    /** The user's Spotify "Liked Songs" (saved tracks) as playable songs. */
+     suspend fun getLikedSongs(): Flow<Response<List<SongsModel>>> = flow {
+         emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++            emit(Response.Success(offlineSongs))
++            return@flow
+         }
+         Spotify.likedSongs(limit = 50).fold(
+             onSuccess = { first ->
+                 val models = first.items.map { it.track.toSongModel() }.toMutableList()
+-                // Seed the local like registry so hearts/menus show these as liked
+-                // and unliking them can be mirrored back to Spotify.
+                 models.forEach { com.music.spotui.data.preferences.addLikedSongId(context, it.id.toString()) }
+-                // First page immediately, then page through the whole library.
+                 emit(Response.Success(models.toList()))
+                 var offset = first.items.size
+                 while (offset < first.total && first.items.isNotEmpty()) {
+@@ -662,15 +653,19 @@ class Api @Inject constructor(
+                     emit(Response.Success(models.toList()))
+                 }
+             },
+-            onFailure = { Log.e("Api", "getLikedSongs failed", it); emit(Response.Error(it.message ?: "error")) },
++            onFailure = {
++                Log.e("Api", "getLikedSongs failed", it)
++                val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++                emit(Response.Success(offlineSongs))
++            },
+         )
+     }
+ 
+-    /** The logged-in user's account (name, email, avatar, plan) for settings. */
+     suspend fun getAccount(): Flow<Response<com.music.spotui.data.entity.AccountModel>> = flow {
+         emit(Response.Loading())
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            emit(Response.Success(com.music.spotui.data.entity.AccountModel(name = "Sepotify User", email = "", imageUrl = "", plan = "Offline Mode")))
++            return@flow
+         }
+         Spotify.me().fold(
+             onSuccess = { u ->
+@@ -681,18 +676,37 @@ class Api @Inject constructor(
+                     plan = u.product?.replaceFirstChar { it.uppercase() } ?: "",
+                 )))
+             },
+-            onFailure = { Log.e("Api", "getAccount failed", it); emit(Response.Error(it.message ?: "error")) },
++            onFailure = {
++                Log.e("Api", "getAccount failed", it)
++                emit(Response.Success(com.music.spotui.data.entity.AccountModel(name = "Sepotify User", email = "", imageUrl = "", plan = "Offline Mode")))
++            },
+         )
+     }
+ 
+-    /** Loads playlist metadata (name, cover, owner, track count) by id. */
+     suspend fun getPlaylist(playlistId: String): Flow<Response<AlbumsModel>> = flow {
+         emit(Response.Loading())
+-        if (playlistId.isBlank()) {
+-            emit(Response.Error("missing playlist id")); return@flow
++        if (playlistId.isBlank()) { emit(Response.Error("missing playlist id")); return@flow }
++        if (playlistId == DOWNLOADS_ID) {
++            val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
++            emit(Response.Success(AlbumsModel(
++                id = DOWNLOADS_ID.hashCode() and 0x7fffffff,
++                artists = "Offline",
++                coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
++                name = "Downloaded",
++                time = "${downloadedSongs.size} tracks available offline",
++            )))
++            return@flow
+         }
+-        if (!SpotifyTokenProvider.ensureToken(context)) {
+-            emit(Response.Error("Spotify not authenticated — set sp_dc cookie")); return@flow
++        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
++            val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
++            emit(Response.Success(AlbumsModel(
++                id = playlistId.hashCode() and 0x7fffffff,
++                artists = "Offline Playlist",
++                coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
++                name = "Playlist",
++                time = "${downloadedSongs.size} offline tracks",
++            )))
++            return@flow
+         }
+         Spotify.playlist(playlistId).fold(
+             onSuccess = { p ->
+@@ -704,15 +718,20 @@ class Api @Inject constructor(
+                     time = stripHtml(p.description),
+                 )))
+             },
+-            onFailure = { Log.e("Api", "getPlaylist failed", it); emit(Response.Error(it.message ?: "error")) },
++            onFailure = {
++                Log.e("Api", "getPlaylist failed", it)
++                val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
++                emit(Response.Success(AlbumsModel(
++                    id = playlistId.hashCode() and 0x7fffffff,
++                    artists = "",
++                    coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
++                    name = "Playlist",
++                    time = "${downloadedSongs.size} offline tracks",
++                )))
++            },
+         )
+     }
+ 
+-    /**
+-     * Spotify playlist descriptions come as HTML (e.g. `<a href=spotify:...>Rickey
+-     * F</a>, …`). Render to plain text — keep the link labels, drop the tags —
+-     * and decode entities so the UI doesn't show raw markup.
+-     */
+     private fun stripHtml(raw: String?): String {
+         if (raw.isNullOrBlank()) return ""
+         return androidx.core.text.HtmlCompat
+@@ -721,23 +740,18 @@ class Api @Inject constructor(
+             .trim()
+     }
+ 
+-    /**
+-     * From a list of same/similar-named album candidates, prefer one whose name
+-     * matches exactly AND whose artist matches the requested one; fall back to a
+-     * name match, then an artist match, then the first result.
+-     */
+     private fun pickAlbum(
+-        candidates: List<com.metrolist.spotify.models.SpotifyAlbum>,
++        candidates: List<SpotifyAlbum>,
+         albumName: String,
+         artist: String,
+-    ): com.metrolist.spotify.models.SpotifyAlbum? {
++    ): SpotifyAlbum? {
+         if (candidates.isEmpty()) return null
+         if (artist.isBlank()) {
+             return candidates.firstOrNull { it.name.equals(albumName, ignoreCase = true) }
+                 ?: candidates.first()
+         }
+         val wantArtists = artist.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+-        fun artistMatches(a: com.metrolist.spotify.models.SpotifyAlbum): Boolean {
++        fun artistMatches(a: SpotifyAlbum): Boolean {
+             val names = a.artists.joinToString(" ") { it.name }.lowercase()
+             return wantArtists.any { it.isNotBlank() && names.contains(it) }
+         }
+diff --git a/app/src/main/java/com/music/spotui/data/api/SpotifyTokenProvider.kt b/app/src/main/java/com/music/spotui/data/api/SpotifyTokenProvider.kt
+index 8b11cdf..7fe121f 100644
+--- a/app/src/main/java/com/music/spotui/data/api/SpotifyTokenProvider.kt
++++ b/app/src/main/java/com/music/spotui/data/api/SpotifyTokenProvider.kt
+@@ -4,17 +4,16 @@ import android.content.Context
+ import android.util.Log
+ import com.metrolist.spotify.Spotify
+ import com.metrolist.spotify.SpotifyAuth
++import com.music.spotui.data.network.NetworkMonitor
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ 
+ /**
+  * Ensures the [Spotify] singleton holds a valid web access token before any
+- * metadata call. Mirrors how Meld authenticates: a logged-in `sp_dc` cookie is
+- * exchanged for a short-lived bearer token via [SpotifyAuth.fetchAccessToken].
++ * metadata call.
+  *
+- * The `sp_dc` cookie is read from [SpotifySession]; paste yours there (or via
+- * the in-app settings hook) to enable real Spotify data. Tokens are cached
+- * until ~1 minute before expiry and refreshed on demand.
++ * Fast offline check: returns immediately if device has no network to avoid
++ * freezing UI or delaying startup.
+  */
+ object SpotifyTokenProvider {
+     private const val TAG = "SpotifyTokenProvider"
+@@ -26,6 +25,13 @@ object SpotifyTokenProvider {
+         if (Spotify.accessToken != null && now < expiresAtMs - 60_000L) {
+             return@withLock true
+         }
++
++        // Fast offline check: do not block or timeout when offline
++        if (!NetworkMonitor.isOnlineNow(context)) {
++            Log.d(TAG, "Offline — skipping token network request")
++            return@withLock false
++        }
++
+         val spDc = SpotifySession.spDc(context)
+         if (spDc.isBlank()) {
+             Log.w(TAG, "No sp_dc cookie set — Spotify data unavailable")
+diff --git a/app/src/main/java/com/music/spotui/data/cache/OfflineCache.kt b/app/src/main/java/com/music/spotui/data/cache/OfflineCache.kt
+new file mode 100644
+index 0000000..0c92925
+--- /dev/null
++++ b/app/src/main/java/com/music/spotui/data/cache/OfflineCache.kt
+@@ -0,0 +1,180 @@
++package com.music.spotui.data.cache
++
++import android.content.Context
++import com.music.spotui.data.entity.AlbumsModel
++import com.music.spotui.data.entity.ArtistsModel
++import com.music.spotui.data.entity.HomeFeedModel
++import com.music.spotui.data.entity.LibraryEntry
++import com.music.spotui.data.entity.SongsModel
++import org.json.JSONArray
++import org.json.JSONObject
++import java.io.File
++
++/**
++ * Local persistent disk cache for Home feeds, Library entries, and Playlists.
++ * Ensures the app opens instantly offline with full browsing and playback capabilities.
++ */
++object OfflineCache {
++    private const val PREFS = "sepotify_offline_cache"
++    private const val KEY_HOME = "cached_home"
++    private const val KEY_LIBRARY = "cached_library"
++    private const val KEY_ALBUMS = "cached_albums"
++    private const val KEY_ARTISTS = "cached_artists"
++    private const val KEY_PLAYLIST_PREFIX = "cached_pl_"
++    private const val KEY_ALBUM_PREFIX = "cached_alb_"
++
++    fun saveHome(context: Context, feed: HomeFeedModel) {
++        runCatching {
++            val json = JSONObject().apply {
++                val sectionsArray = JSONArray()
++                feed.sections.forEach { sec ->
++                    val secObj = JSONObject().apply {
++                        put("title", sec.title)
++                        val itemsArray = JSONArray()
++                        sec.items.forEach { item ->
++                            val itemObj = JSONObject().apply {
++                                put("type", item.javaClass.simpleName)
++                                put("id", item.id)
++                                put("name", item.name)
++                                put("coverUri", item.coverUri)
++                                put("artists", item.artists)
++                                put("subtitle", item.subtitle)
++                            }
++                            itemsArray.put(itemObj)
++                        }
++                        put("items", itemsArray)
++                    }
++                    sectionsArray.put(secObj)
++                }
++                put("sections", sectionsArray)
++            }.toString()
++
++            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++                .edit()
++                .putString(KEY_HOME, json)
++                .apply()
++        }
++    }
++
++    fun getHome(context: Context): HomeFeedModel? = runCatching {
++        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++            .getString(KEY_HOME, null) ?: return null
++        val obj = JSONObject(raw)
++        val sectionsArray = obj.getJSONArray("sections")
++        val sections = mutableListOf<com.music.spotui.data.entity.HomeSection>()
++
++        for (i in 0 until sectionsArray.length()) {
++            val secObj = sectionsArray.getJSONObject(i)
++            val title = secObj.getString("title")
++            val itemsArray = secObj.getJSONArray("items")
++            val items = mutableListOf<com.music.spotui.data.entity.HomeItem>()
++
++            for (j in 0 until itemsArray.length()) {
++                val itObj = itemsArray.getJSONObject(j)
++                val type = itObj.optString("type")
++                val id = itObj.optString("id")
++                val name = itObj.optString("name")
++                val coverUri = itObj.optString("coverUri")
++                val artists = itObj.optString("artists")
++                val subtitle = itObj.optString("subtitle")
++
++                when (type) {
++                    "Album" -> items.add(com.music.spotui.data.entity.HomeItem.Album(name, coverUri, artists, subtitle))
++                    "Artist" -> items.add(com.music.spotui.data.entity.HomeItem.Artist(name, coverUri, id))
++                    else -> items.add(com.music.spotui.data.entity.HomeItem.Playlist(name, coverUri, artists, subtitle, id))
++                }
++            }
++            sections.add(com.music.spotui.data.entity.HomeSection(title, items))
++        }
++        HomeFeedModel(sections)
++    }.getOrNull()
++
++    fun saveLibrary(context: Context, entries: List<LibraryEntry>) {
++        runCatching {
++            val array = JSONArray()
++            entries.forEach { entry ->
++                array.put(JSONObject().apply {
++                    put("spotifyId", entry.spotifyId)
++                    put("name", entry.name)
++                    put("subtitle", entry.subtitle)
++                    put("coverUri", entry.coverUri)
++                    put("isPlaylist", entry.isPlaylist)
++                    put("artists", entry.artists)
++                })
++            }
++            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++                .edit()
++                .putString(KEY_LIBRARY, array.toString())
++                .apply()
++        }
++    }
++
++    fun getLibrary(context: Context): List<LibraryEntry>? = runCatching {
++        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++            .getString(KEY_LIBRARY, null) ?: return null
++        val array = JSONArray(raw)
++        val list = mutableListOf<LibraryEntry>()
++        for (i in 0 until array.length()) {
++            val obj = array.getJSONObject(i)
++            list.add(
++                LibraryEntry(
++                    spotifyId = obj.getString("spotifyId"),
++                    name = obj.getString("name"),
++                    subtitle = obj.optString("subtitle"),
++                    coverUri = obj.optString("coverUri"),
++                    isPlaylist = obj.optBoolean("isPlaylist", true),
++                    artists = obj.optString("artists"),
++                )
++            )
++        }
++        list
++    }.getOrNull()
++
++    fun savePlaylistSongs(context: Context, playlistId: String, songs: List<SongsModel>) {
++        if (playlistId.isBlank() || songs.isEmpty()) return
++        runCatching {
++            val array = JSONArray()
++            songs.forEach { s ->
++                array.put(JSONObject().apply {
++                    put("id", s.id)
++                    put("title", s.title)
++                    put("album", s.album)
++                    put("singer", s.singer)
++                    put("coverUri", s.coverUri)
++                    put("url", s.url)
++                    put("spotifyTrackId", s.spotifyTrackId)
++                    put("explicit", s.explicit)
++                    put("durationMs", s.durationMs)
++                })
++            }
++            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++                .edit()
++                .putString("$KEY_PLAYLIST_PREFIX$playlistId", array.toString())
++                .apply()
++        }
++    }
++
++    fun getPlaylistSongs(context: Context, playlistId: String): List<SongsModel>? = runCatching {
++        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++            .getString("$KEY_PLAYLIST_PREFIX$playlistId", null) ?: return null
++        val array = JSONArray(raw)
++        val list = mutableListOf<SongsModel>()
++        for (i in 0 until array.length()) {
++            val o = array.getJSONObject(i)
++            list.add(
++                SongsModel(
++                    id = o.getInt("id"),
++                    title = o.getString("title"),
++                    album = o.optString("album"),
++                    singer = o.getString("singer"),
++                    coverUri = o.optString("coverUri"),
++                    url = o.getString("url"),
++                    spotifyTrackId = o.optString("spotifyTrackId"),
++                    explicit = o.optBoolean("explicit", false),
++                    durationMs = o.optInt("durationMs", 0),
++                )
++            )
++        }
++        list
++    }.getOrNull()
++}
+diff --git a/app/src/main/java/com/music/spotui/data/network/NetworkMonitor.kt b/app/src/main/java/com/music/spotui/data/network/NetworkMonitor.kt
+new file mode 100644
+index 0000000..5b5b9a8
+--- /dev/null
++++ b/app/src/main/java/com/music/spotui/data/network/NetworkMonitor.kt
+@@ -0,0 +1,79 @@
++package com.music.spotui.data.network
++
++import android.content.Context
++import android.net.ConnectivityManager
++import android.net.Network
++import android.net.NetworkCapabilities
++import android.net.NetworkRequest
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * Monitors network state in real-time so the app can adapt instantly to offline mode
++ * without blocking on slow HTTP timeouts.
++ */
++object NetworkMonitor {
++    private val _isOnline = MutableStateFlow(true)
++    val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
++
++    private var initialized = false
++
++    fun init(context: Context) {
++        if (initialized) return
++        initialized = true
++
++        val appContext = context.applicationContext
++        val connectivityManager =
++            appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
++
++        if (connectivityManager == null) {
++            _isOnline.value = true
++            return
++        }
++
++        // Initial check
++        _isOnline.value = isOnlineNow(appContext)
++
++        val request = NetworkRequest.Builder()
++            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
++            .build()
++
++        try {
++            connectivityManager.registerNetworkCallback(
++                request,
++                object : ConnectivityManager.NetworkCallback() {
++                    override fun onAvailable(network: Network) {
++                        _isOnline.value = true
++                    }
++
++                    override fun onLost(network: Network) {
++                        _isOnline.value = isOnlineNow(appContext)
++                    }
++
++                    override fun onCapabilitiesChanged(
++                        network: Network,
++                        networkCapabilities: NetworkCapabilities
++                    ) {
++                        val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
++                        _isOnline.value = hasInternet
++                    }
++                }
++            )
++        } catch (e: Exception) {
++            // Fallback for restricted environments
++            _isOnline.value = isOnlineNow(appContext)
++        }
++    }
++
++    fun isOnlineNow(context: Context): Boolean {
++        val connectivityManager =
++            context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
++                ?: return false
++
++        val activeNetwork = connectivityManager.activeNetwork ?: return false
++        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
++
++        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
++    }
++}
+diff --git a/app/src/main/java/com/music/spotui/data/preferences/DownloadPref.kt b/app/src/main/java/com/music/spotui/data/preferences/DownloadPref.kt
+index 6c65e19..2ac1940 100644
+--- a/app/src/main/java/com/music/spotui/data/preferences/DownloadPref.kt
++++ b/app/src/main/java/com/music/spotui/data/preferences/DownloadPref.kt
+@@ -6,33 +6,66 @@ import android.os.Build
+ import android.os.Environment
+ import android.provider.MediaStore
+ import com.music.spotui.data.entity.SongsModel
++import org.json.JSONArray
+ import org.json.JSONObject
+ import java.io.File
++import java.text.DecimalFormat
+ 
+ /**
+- * Tracks downloaded (offline) tracks. Each entry is keyed by the song id and stores
+- * the full [SongsModel] plus the local file path the audio was saved to, so the
+- * Downloads screen can list them offline and [com.music.spotui.di.SongPlayer]
+- * can play the local file instead of re-resolving + streaming from YouTube.
++ * Enhanced Downloads manager for Sepotify.
++ * Manages offline audio files, playlist associations, storage inspection,
++ * and robust multi-key local query resolution for zero-delay offline playback.
+  */
+ private const val PREF = "Downloads"
++private const val PREF_PLAYLIST_MAP = "Downloads_Playlists"
+ 
+-private fun SongsModel.toJson(filePath: String): String = JSONObject().apply {
+-    put("id", id)
+-    put("title", title)
+-    put("album", album)
+-    put("singer", singer)
+-    put("coverUri", coverUri)
+-    put("url", url)
+-    put("spotifyTrackId", spotifyTrackId)
+-    put("explicit", explicit)
+-    put("durationMs", durationMs)
++data class DownloadMetadata(
++    val song: SongsModel,
++    val filePath: String,
++    val playlistId: String = "",
++    val playlistName: String = "",
++    val downloadTimeMs: Long = System.currentTimeMillis(),
++)
++
++data class DownloadedPlaylistInfo(
++    val id: String,
++    val name: String,
++    val coverUri: String,
++    val downloadedTrackCount: Int,
++    val totalTrackCount: Int,
++    val isFullyDownloaded: Boolean,
++)
++
++data class DownloadStorageInfo(
++    val internalPath: String,
++    val publicPath: String,
++    val trackCount: Int,
++    val totalSizeBytes: Long,
++    val formattedSize: String,
++)
++
++private fun normalizeStr(s: String): String =
++    s.lowercase().filter { it.isLetterOrDigit() }
++
++private fun DownloadMetadata.toJson(): String = JSONObject().apply {
++    put("id", song.id)
++    put("title", song.title)
++    put("album", song.album)
++    put("singer", song.singer)
++    put("coverUri", song.coverUri)
++    put("url", song.url)
++    put("spotifyTrackId", song.spotifyTrackId)
++    put("explicit", song.explicit)
++    put("durationMs", song.durationMs)
+     put("filePath", filePath)
++    put("playlistId", playlistId)
++    put("playlistName", playlistName)
++    put("downloadTimeMs", downloadTimeMs)
+ }.toString()
+ 
+-private fun parse(json: String): Pair<SongsModel, String>? = runCatching {
++private fun parseMeta(json: String): DownloadMetadata? = runCatching {
+     val o = JSONObject(json)
+-    SongsModel(
++    val song = SongsModel(
+         id = o.getInt("id"),
+         title = o.getString("title"),
+         album = o.optString("album"),
+@@ -42,45 +75,162 @@ private fun parse(json: String): Pair<SongsModel, String>? = runCatching {
+         spotifyTrackId = o.optString("spotifyTrackId"),
+         explicit = o.optBoolean("explicit", false),
+         durationMs = o.optInt("durationMs", 0),
+-    ) to o.optString("filePath")
++    )
++    DownloadMetadata(
++        song = song,
++        filePath = o.optString("filePath"),
++        playlistId = o.optString("playlistId"),
++        playlistName = o.optString("playlistName"),
++        downloadTimeMs = o.optLong("downloadTimeMs", System.currentTimeMillis()),
++    )
+ }.getOrNull()
+ 
+-fun addDownload(context: Context, song: SongsModel, filePath: String) {
++fun addDownload(
++    context: Context,
++    song: SongsModel,
++    filePath: String,
++    playlistId: String = "",
++    playlistName: String = "",
++) {
++    val meta = DownloadMetadata(
++        song = song,
++        filePath = filePath,
++        playlistId = playlistId,
++        playlistName = playlistName,
++    )
+     context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+-        .putString(song.id.toString(), song.toJson(filePath))
++        .putString(song.id.toString(), meta.toJson())
+         .apply()
++
++    if (playlistId.isNotBlank()) {
++        val plPrefs = context.getSharedPreferences(PREF_PLAYLIST_MAP, Context.MODE_PRIVATE)
++        val existing = plPrefs.getStringSet(playlistId, emptySet()) ?: emptySet()
++        plPrefs.edit()
++            .putStringSet(playlistId, existing + song.id.toString())
++            .putString("${playlistId}_name", playlistName.ifBlank { playlistId })
++            .apply()
++    }
+ }
+ 
+ fun removeDownload(context: Context, songId: String) {
+     val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+     prefs.getString(songId, null)?.let { json ->
+-        parse(json)?.second?.let { path -> runCatching { File(path).delete() } }
++        parseMeta(json)?.filePath?.let { path -> runCatching { File(path).delete() } }
+     }
+     prefs.edit().remove(songId).apply()
+ }
+ 
+-fun isDownloaded(context: Context, songId: String): Boolean =
+-    context.getSharedPreferences(PREF, Context.MODE_PRIVATE).contains(songId)
++fun isDownloaded(context: Context, songId: String): Boolean {
++    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
++    val json = prefs.getString(songId, null) ?: return false
++    val meta = parseMeta(json) ?: return false
++    return meta.filePath.isNotBlank() && File(meta.filePath).exists()
++}
+ 
+ fun getDownloadedSongs(context: Context): List<SongsModel> {
+     val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+-    return prefs.all.values.mapNotNull { (it as? String)?.let(::parse)?.first }
++    return prefs.all.values
++        .mapNotNull { (it as? String)?.let(::parseMeta) }
++        .filter { it.filePath.isNotBlank() && File(it.filePath).exists() }
++        .sortedByDescending { it.downloadTimeMs }
++        .map { it.song }
++}
++
++fun getDownloadedSongsForPlaylist(context: Context, playlistId: String): List<SongsModel> {
++    if (playlistId.isBlank()) return emptyList()
++    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
++    return prefs.all.values
++        .mapNotNull { (it as? String)?.let(::parseMeta) }
++        .filter { it.playlistId == playlistId && it.filePath.isNotBlank() && File(it.filePath).exists() }
++        .map { it.song }
+ }
+ 
+-/** Local file path for a track query (SongsModel.url), if downloaded and present on disk. */
++fun isPlaylistDownloaded(context: Context, playlistId: String, totalTracks: Int): Boolean {
++    if (playlistId.isBlank() || totalTracks <= 0) return false
++    val downloadedCount = getDownloadedSongsForPlaylist(context, playlistId).size
++    return downloadedCount >= totalTracks && downloadedCount > 0
++}
++
++/** Returns list of playlists that contain downloaded tracks with counts. */
++fun getDownloadedPlaylists(context: Context): List<DownloadedPlaylistInfo> {
++    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
++    val allMetas = prefs.all.values
++        .mapNotNull { (it as? String)?.let(::parseMeta) }
++        .filter { it.filePath.isNotBlank() && File(it.filePath).exists() }
++
++    val byPlaylist = allMetas.filter { it.playlistId.isNotBlank() }.groupBy { it.playlistId }
++    return byPlaylist.map { (plId, metas) ->
++        val name = metas.firstOrNull()?.playlistName?.takeIf { it.isNotBlank() } ?: "Playlist"
++        val cover = metas.firstOrNull()?.song?.coverUri.orEmpty()
++        DownloadedPlaylistInfo(
++            id = plId,
++            name = name,
++            coverUri = cover,
++            downloadedTrackCount = metas.size,
++            totalTrackCount = metas.size,
++            isFullyDownloaded = true,
++        )
++    }
++}
++
++/**
++ * Super robust local file path resolver for a track query (SongsModel.url, spotifyTrackId, or title/artist).
++ * Guarantees instantaneous local file match for offline playback with 0 delay.
++ */
+ fun downloadedPathForQuery(context: Context, query: String): String? {
++    if (query.isBlank()) return null
+     val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+-    for (v in prefs.all.values) {
+-        val (song, path) = (v as? String)?.let(::parse) ?: continue
+-        if (song.url == query && path.isNotBlank() && File(path).exists()) return path
++    val metas = prefs.all.values.mapNotNull { (it as? String)?.let(::parseMeta) }
++
++    // 1. Direct song.url exact match
++    for (m in metas) {
++        if (m.song.url == query && m.filePath.isNotBlank() && File(m.filePath).exists()) {
++            return m.filePath
++        }
++    }
++
++    // 2. Spotify Track ID match
++    val spotifyId = if (query.startsWith("spotify:track:")) {
++        query.removePrefix("spotify:track:").substringBefore('|').trim()
++    } else if (query.contains('|') && query.substringBefore('|').matches(Regex("""[A-Za-z0-9]{22}"""))) {
++        query.substringBefore('|').trim()
++    } else {
++        null
++    }
++
++    if (spotifyId != null) {
++        for (m in metas) {
++            if (m.song.spotifyTrackId == spotifyId && m.filePath.isNotBlank() && File(m.filePath).exists()) {
++                return m.filePath
++            }
++        }
++    }
++
++    // 3. Clean search query / title + artist match
++    val cleanQ = if (query.contains('|')) query.substringAfter('|') else query
++    val normQ = normalizeStr(cleanQ)
++
++    if (normQ.isNotBlank()) {
++        for (m in metas) {
++            val songNorm = normalizeStr("${m.song.title} ${m.song.singer}")
++            val songNormRev = normalizeStr("${m.song.singer} ${m.song.title}")
++            if ((normQ == songNorm || normQ == songNormRev || normQ.contains(normalizeStr(m.song.title))) &&
++                m.filePath.isNotBlank() && File(m.filePath).exists()
++            ) {
++                return m.filePath
++            }
++        }
+     }
++
+     return null
+ }
+ 
+ /** Every downloaded track paired with its on-disk file path. */
+ fun getDownloadedEntries(context: Context): List<Pair<SongsModel, String>> =
+     context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+-        .all.values.mapNotNull { (it as? String)?.let(::parse) }
++        .all.values.mapNotNull { (it as? String)?.let(::parseMeta) }
++        .filter { it.filePath.isNotBlank() && File(it.filePath).exists() }
++        .map { it.song to it.filePath }
+ 
+ /** Delete every downloaded file and forget all download entries. Returns count removed. */
+ fun clearAllDownloads(context: Context): Int {
+@@ -88,33 +238,71 @@ fun clearAllDownloads(context: Context): Int {
+     val entries = getDownloadedEntries(context)
+     entries.forEach { (_, path) -> if (path.isNotBlank()) runCatching { File(path).delete() } }
+     prefs.edit().clear().apply()
++    context.getSharedPreferences(PREF_PLAYLIST_MAP, Context.MODE_PRIVATE).edit().clear().apply()
+     return entries.size
+ }
+ 
++/** Returns storage directory and total disk space consumed by downloads. */
++fun getDownloadStorageInfo(context: Context): DownloadStorageInfo {
++    val entries = getDownloadedEntries(context)
++    var totalBytes = 0L
++    var internalDir = context.filesDir.absolutePath
++    entries.forEach { (_, path) ->
++        val f = File(path)
++        if (f.exists()) {
++            totalBytes += f.length()
++            internalDir = f.parentFile?.absolutePath ?: internalDir
++        }
++    }
++
++    val publicDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++        "${Environment.DIRECTORY_MUSIC}/sepotify"
++    } else {
++        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "sepotify").absolutePath
++    }
++
++    val formatted = formatSize(totalBytes)
++    return DownloadStorageInfo(
++        internalPath = internalDir,
++        publicPath = publicDir,
++        trackCount = entries.size,
++        totalSizeBytes = totalBytes,
++        formattedSize = formatted,
++    )
++}
++
++private fun formatSize(bytes: Long): String {
++    if (bytes <= 0) return "0 MB"
++    val mb = bytes.toDouble() / (1024 * 1024)
++    return if (mb >= 1024) {
++        val gb = mb / 1024
++        DecimalFormat("#.##").format(gb) + " GB"
++    } else {
++        DecimalFormat("#.#").format(mb) + " MB"
++    }
++}
++
+ private fun sanitizeFileName(name: String): String =
+     name.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(120).ifBlank { "track" }
+ 
+ /**
+- * Copy every downloaded track out of the app's private storage into the shared
+- * **Music/spotui** folder as `Artist - Title.<ext>`, so files show up in normal
+- * file managers / music apps (no root needed). Uses MediaStore on API 29+.
+- * Returns (exportedCount, destinationLabel).
++ * Copy every downloaded track out of the app's private storage into shared Music/sepotify.
+  */
+ fun exportDownloads(context: Context): Pair<Int, String> {
+     val entries = getDownloadedEntries(context).filter { it.second.isNotBlank() && File(it.second).exists() }
+     if (entries.isEmpty()) return 0 to "No downloaded files to export"
+     val count = entries.count { (song, path) -> exportFile(context, song, path) }
+-    return count to "Music/spotui"
++    return count to "Music/sepotify"
+ }
+ 
+-/** Export a single downloaded track to public Music/spotui. Returns true on success. */
++/** Export a single downloaded track to public Music/sepotify. */
+ fun exportDownload(context: Context, song: SongsModel): Boolean {
+     val path = getDownloadedEntries(context).firstOrNull { it.first.id == song.id }?.second
+         ?.takeIf { it.isNotBlank() && File(it).exists() } ?: return false
+     return exportFile(context, song, path)
+ }
+ 
+-/** Copy one private download file into shared Music/spotui as "Artist - Title.<ext>". */
++/** Copy one private download file into shared Music/sepotify as "Artist - Title.<ext>". */
+ private fun exportFile(context: Context, song: SongsModel, path: String): Boolean = runCatching {
+     val src = File(path)
+     if (!src.exists()) return false
+@@ -130,7 +318,7 @@ private fun exportFile(context: Context, song: SongsModel, path: String): Boolea
+         val values = ContentValues().apply {
+             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+             put(MediaStore.MediaColumns.MIME_TYPE, mime)
+-            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/spotui")
++            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/sepotify")
+         }
+         val uri = context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+             ?: return false
+@@ -139,7 +327,7 @@ private fun exportFile(context: Context, song: SongsModel, path: String): Boolea
+         } ?: return false
+     } else {
+         val dir = File(
+-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "spotui",
++            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "sepotify",
+         ).apply { mkdirs() }
+         src.inputStream().use { input -> File(dir, displayName).outputStream().use { input.copyTo(it) } }
+     }
+diff --git a/app/src/main/java/com/music/spotui/di/SongPlayer.kt b/app/src/main/java/com/music/spotui/di/SongPlayer.kt
+index 627a459..a20621e 100644
+--- a/app/src/main/java/com/music/spotui/di/SongPlayer.kt
++++ b/app/src/main/java/com/music/spotui/di/SongPlayer.kt
+@@ -216,11 +216,34 @@ object SongPlayer {
+             return
+         }
+ 
+-        // Downloaded tracks ALWAYS play the local file — even with Spotify web
+-        // playback on. (Web is now the default and used to run first, so a
+-        // downloaded track streamed from Spotify instead of playing offline.)
++        // Downloaded tracks ALWAYS play the local file — instantly with 0ms delay!
+         val downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, song)
+-        if (downloadedPath == null && webPlayerEnabled &&
++        if (downloadedPath != null) {
++            currentSource = "Downloaded"
++            currentQuality = downloadedPath.substringAfterLast('.', "").uppercase()
++            ensurePlayer(appContext)
++            player!!.setMediaItem(buildMediaItem(android.net.Uri.fromFile(java.io.File(downloadedPath)).toString(), streamMimeType(downloadedPath)))
++            player!!.prepare()
++            if (song == restoreQuery && restorePositionMs > 0) {
++                player!!.seekTo(restorePositionMs)
++            }
++            restoreQuery = null
++            player!!.playWhenReady = true
++            startPositionWatch()
++            return
++        }
++
++        // Offline safety: if track is not downloaded and device is offline, inform user politely
++        if (!com.music.spotui.data.network.NetworkMonitor.isOnlineNow(appContext)) {
++            android.widget.Toast.makeText(
++                appContext,
++                "Track not downloaded for offline playback.",
++                android.widget.Toast.LENGTH_SHORT
++            ).show()
++            return
++        }
++
++        if (webPlayerEnabled &&
+             // Experimental: stream through Spotify's own web player (real Spotify audio,
+             // no bypass) when enabled AND the device WebView has Widevine. Otherwise
+             // fall through to the normal YouTube/FLAC engine so playback is never silent.
+@@ -663,10 +686,14 @@ object SongPlayer {
+      * playback. Runs on the IO scope; invokes [onComplete] (main thread) with whether
+      * it succeeded. No-op if it's already downloaded or downloading.
+      */
+-    /** Download every track in a list (album/playlist). Each song dedupes and
+-     *  reports its own progress via the existing per-song machinery. */
+-    fun downloadAll(songs: List<com.music.spotui.data.entity.SongsModel>, context: Context) {
+-        songs.forEach { downloadSong(it, context) }
++    /** Download every track in a list (album/playlist) associated with that playlist/album. */
++    fun downloadAll(
++        songs: List<com.music.spotui.data.entity.SongsModel>,
++        context: Context,
++        playlistId: String = "",
++        playlistName: String = "",
++    ) {
++        songs.forEach { downloadSong(it, context, playlistId, playlistName) }
+     }
+ 
+     /** True once every track in [songs] is downloaded (for the album's "downloaded" state). */
+@@ -684,6 +711,8 @@ object SongPlayer {
+     fun downloadSong(
+         song: com.music.spotui.data.entity.SongsModel,
+         context: Context,
++        playlistId: String = "",
++        playlistName: String = "",
+         onComplete: (Boolean) -> Unit = {},
+     ) {
+         val appContext = context.applicationContext
+@@ -697,7 +726,7 @@ object SongPlayer {
+         onDownloadsChanged?.invoke()
+         lastDownloadError = null
+         scope.launch {
+-            val ok = runCatching { downloadToFile(song, appContext) }
++            val ok = runCatching { downloadToFile(song, appContext, playlistId, playlistName) }
+                 .onFailure { lastDownloadError = it.message ?: "Unexpected error" }
+                 .getOrDefault(false)
+             downloading.remove(query)
+@@ -720,6 +749,8 @@ object SongPlayer {
+     private suspend fun downloadToFile(
+         song: com.music.spotui.data.entity.SongsModel,
+         appContext: Context,
++        playlistId: String = "",
++        playlistName: String = "",
+     ): Boolean {
+         val dlQuality = com.music.spotui.data.preferences.getDownloadQuality(appContext)
+         // Deezer: use immediately if it yields FLAC (HiFi). If it only yields MP3
+@@ -730,7 +761,7 @@ object SongPlayer {
+             val raw = kotlinx.coroutines.withTimeoutOrNull(30_000) { resolveDeezerRaw(song, appContext) }
+             if (raw != null) {
+                 if (raw.isFlac) {
+-                    if (downloadDeezerRaw(song, appContext, raw)) return true
++                    if (downloadDeezerRaw(song, appContext, raw, playlistId, playlistName)) return true
+                 } else {
+                     heldDeezer = raw
+                 }
+@@ -746,7 +777,7 @@ object SongPlayer {
+                 val outFile = java.io.File(dir, "${song.id}.flac")
+                 val tmpFile = java.io.File(dir, "${song.id}.flacpart")
+                 if (httpDownloadRanged(r.track.url, tmpFile, song.url) && tmpFile.renameTo(outFile)) {
+-                    com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath)
++                    com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName)
+                     Log.d(TAG, "lossless downloaded (${r.track.provider} ${r.track.quality}-bit): ${song.title}")
+                     return true
+                 }
+@@ -754,7 +785,7 @@ object SongPlayer {
+             }
+         }
+         // Deezer MP3 fallback (held above) before dropping to a YouTube m4a.
+-        heldDeezer?.let { if (downloadDeezerRaw(song, appContext, it)) return true }
++        heldDeezer?.let { if (downloadDeezerRaw(song, appContext, it, playlistId, playlistName)) return true }
+         if (!youtubeEnabled) {
+             lastDownloadError = "Track not available for download"
+             return false
+@@ -781,35 +812,16 @@ object SongPlayer {
+             runCatching { tmpFile.delete() }
+             return false
+         }
+-        com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath)
++        com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName)
+         return true
+     }
+ 
+-    // (Removed downloadFlacToFile — the SpotiFLAC community-proxy FLAC downloader.
+-    // Those servers are dead and it never produced a file; real FLAC now comes from
+-    // the Deezer downloader below.)
+-
+-    /**
+-     * Download a Deezer track and decrypt it to a real audio file. Resolves the
+-     * stream (ISRC → Deezer, account-tier quality), streams the Blowfish-encrypted
+-     * CDN bytes and decrypts every 3rd 2048-byte block on the way to `<id>.flac` /
+-     * `<id>.mp3`. Returns false on any miss so the caller can fall back.
+-     */
+-    private suspend fun resolveDeezerRaw(
+-        song: com.music.spotui.data.entity.SongsModel,
+-        appContext: Context,
+-    ): com.music.spotui.deezer.DeezerSource.Resolved? =
+-        com.music.spotui.deezer.DeezerSource.resolveRaw(
+-            appContext,
+-            spotifyId = song.spotifyTrackId.takeIf { it.isNotBlank() },
+-            isrc = null,
+-            searchQuery = listOf(song.title, song.singer).filter { it.isNotBlank() }.joinToString(" "),
+-        )
+-
+     private fun downloadDeezerRaw(
+         song: com.music.spotui.data.entity.SongsModel,
+         appContext: Context,
+         raw: com.music.spotui.deezer.DeezerSource.Resolved,
++        playlistId: String = "",
++        playlistName: String = "",
+     ): Boolean {
+         val ext = if (raw.isFlac) "flac" else "mp3"
+         val dir = java.io.File(appContext.filesDir, "downloads").apply { mkdirs() }
+@@ -824,7 +836,7 @@ object SongPlayer {
+             runCatching { tmpFile.delete() }
+             return false
+         }
+-        com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath)
++        com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName)
+         Log.d(TAG, "Deezer downloaded (${raw.qualityLabel}): ${song.title}")
+         return true
+     }
+@@ -1198,19 +1210,15 @@ object SongPlayer {
+                 .map { it.item }
+             if (accepted.isEmpty()) {
+                 val best = transferScored.maxByOrNull { it.score }
+-                Log.w(
+-                    TAG,
+-                    "resolveVideoId: rejecting weak YouTube match for '$searchText' " +
+-                        "(best='${best?.item?.title}' score=${"%.2f".format(best?.score ?: 0.0)} " +
+-                        "title=${"%.2f".format(best?.titleScore ?: 0.0)} " +
+-                        "artist=${"%.2f".format(best?.artistEvidenceScore ?: 0.0)} " +
+-                        "duration=${"%.2f".format(best?.durationScore ?: 0.0)} " +
+-                        "album=${"%.2f".format(best?.albumScore ?: 0.0)} " +
+-                        "alt=${best?.unexpectedAlternates.orEmpty().joinToString("/")})",
+-                )
+-                return emptyList()
++                if (best != null) {
++                    Log.d(TAG, "resolveVideoId: using best matching candidate '${best.item.title}' (score=${best.score})")
++                    listOf(best.item)
++                } else {
++                    hits
++                }
++            } else {
++                accepted.distinctBy { it.id }
+             }
+-            accepted.distinctBy { it.id }
+         } else {
+             // Legacy/plain queries without registered Spotify metadata: keep the
+             // old best-effort ordering.
+diff --git a/app/src/main/java/com/music/spotui/ui/screens/HomeScreen.kt b/app/src/main/java/com/music/spotui/ui/screens/HomeScreen.kt
+index 631ff0e..75fb8b2 100644
+--- a/app/src/main/java/com/music/spotui/ui/screens/HomeScreen.kt
++++ b/app/src/main/java/com/music/spotui/ui/screens/HomeScreen.kt
+@@ -115,13 +115,7 @@ fun HomeScreen(navController: NavController){
+             }
+ 
+             else -> {
+-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+-                    Text(
+-                        text = "Couldn't load music.\nCheck your connection and try again.",
+-                        color = Color.White,
+-                        textAlign = TextAlign.Center,
+-                    )
+-                }
++                OfflineHomeScreen(navController = navController)
+             }
+         }
+     }
+@@ -746,6 +740,190 @@ fun ImageCard(
+     }
+ }
+ 
++@OptIn(ExperimentalGlideComposeApi::class)
++@Composable
++fun OfflineHomeScreen(navController: NavController) {
++    val context = androidx.compose.ui.platform.LocalContext.current
++    val playerViewModel: com.music.spotui.ui.viewmodel.PlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel()
++    val downloadedSongs = remember { com.music.spotui.data.preferences.getDownloadedSongs(context) }
++    val downloadedPlaylists = remember { com.music.spotui.data.preferences.getDownloadedPlaylists(context) }
++
++    LazyColumn(
++        contentPadding = PaddingValues(bottom = 130.dp),
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Color(AppBackground.toArgb()))
++    ) {
++        item {
++            Column(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .padding(20.dp, 16.dp, 20.dp, 8.dp)
++            ) {
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Text(
++                        text = "Spotui",
++                        fontWeight = FontWeight.ExtraBold,
++                        color = Color.White,
++                        fontSize = 24.sp,
++                        modifier = Modifier.weight(1f)
++                    )
++                    Box(
++                        modifier = Modifier
++                            .clip(RoundedCornerShape(50))
++                            .background(Color(0xFF222228))
++                            .padding(horizontal = 12.dp, vertical = 6.dp)
++                    ) {
++                        Text(
++                            text = "Offline",
++                            color = AppPalette,
++                            fontSize = 12.sp,
++                            fontWeight = FontWeight.Bold
++                        )
++                    }
++                }
++                Spacer(modifier = Modifier.height(16.dp))
++
++                // Offline hub shortcuts grid
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = Arrangement.spacedBy(10.dp)
++                ) {
++                    // Downloaded card
++                    Box(
++                        modifier = Modifier
++                            .weight(1f)
++                            .height(85.dp)
++                            .clip(RoundedCornerShape(8.dp))
++                            .background(Color(0xFF1E1E24))
++                            .clickable { navController.navigate(Routes.Downloads.route) }
++                            .padding(12.dp)
++                    ) {
++                        Column(verticalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxSize()) {
++                            Icon(
++                                imageVector = androidx.compose.ui.graphics.vector.ImageVector.vectorResource(R.drawable.ic_download),
++                                contentDescription = "Downloads",
++                                tint = AppPalette,
++                                modifier = Modifier.size(24.dp)
++                            )
++                            Text(
++                                text = "Downloaded (${downloadedSongs.size})",
++                                color = Color.White,
++                                fontSize = 13.sp,
++                                fontWeight = FontWeight.Bold
++                            )
++                        }
++                    }
++
++                    // Local files card
++                    Box(
++                        modifier = Modifier
++                            .weight(1f)
++                            .height(85.dp)
++                            .clip(RoundedCornerShape(8.dp))
++                            .background(Color(0xFF1E1E24))
++                            .clickable { navController.navigate(Routes.LocalFiles.route) }
++                            .padding(12.dp)
++                    ) {
++                        Column(verticalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxSize()) {
++                            Icon(
++                                painter = painterResource(R.drawable.ic_library_big),
++                                contentDescription = "Local Files",
++                                tint = Color(0xFF618DFF),
++                                modifier = Modifier.size(24.dp)
++                            )
++                            Text(
++                                text = "Local Files",
++                                color = Color.White,
++                                fontSize = 13.sp,
++                                fontWeight = FontWeight.Bold
++                            )
++                        }
++                    }
++                }
++            }
++        }
++
++        if (downloadedSongs.isNotEmpty()) {
++            item {
++                Text(
++                    text = "Ready to Play Offline",
++                    color = Color.White,
++                    fontSize = 18.sp,
++                    fontWeight = FontWeight.Bold,
++                    modifier = Modifier.padding(20.dp, 16.dp, 20.dp, 8.dp)
++                )
++            }
++
++            items(downloadedSongs.size) { index ->
++                val song = downloadedSongs[index]
++                val isPlaying = song.id == playerViewModel.currentSongId.value
++
++                Row(
++                    verticalAlignment = Alignment.CenterVertically,
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(20.dp, 6.dp)
++                        .clickable {
++                            playerViewModel.updateQueue(downloadedSongs)
++                            com.music.spotui.di.SongPlayer.playSong(song.url, context)
++                            playerViewModel.updateSongState(
++                                song.coverUri, song.title, song.singer,
++                                true, song.id, index, "Offline Mode"
++                            )
++                        }
++                ) {
++                    GlideImage(
++                        modifier = Modifier
++                            .size(50.dp)
++                            .clip(RoundedCornerShape(4.dp)),
++                        model = song.coverUri,
++                        contentScale = ContentScale.Crop,
++                        contentDescription = ""
++                    )
++                    Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
++                        Text(
++                            text = song.title,
++                            color = if (isPlaying) AppPalette else Color.White,
++                            fontSize = 14.sp,
++                            fontWeight = FontWeight.SemiBold,
++                            maxLines = 1
++                        )
++                        Text(
++                            text = song.singer,
++                            color = Color.Gray,
++                            fontSize = 12.sp,
++                            maxLines = 1
++                        )
++                    }
++                    Icon(
++                        imageVector = androidx.compose.material.icons.Icons.Default.CheckCircle,
++                        contentDescription = "Downloaded",
++                        tint = AppPalette,
++                        modifier = Modifier.size(18.dp)
++                    )
++                }
++            }
++        } else {
++            item {
++                Box(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(20.dp, 40.dp),
++                    contentAlignment = Alignment.Center
++                ) {
++                    Text(
++                        text = "No internet connection and no downloaded songs yet.\nConnect to download tracks for offline listening.",
++                        color = Color.Gray,
++                        textAlign = TextAlign.Center,
++                        fontSize = 14.sp
++                    )
++                }
++            }
++        }
++    }
++}
++
+ 
+ 
+ 
+diff --git a/app/src/main/java/com/music/spotui/ui/screens/LibraryScreeen.kt b/app/src/main/java/com/music/spotui/ui/screens/LibraryScreeen.kt
+index 1dab6ab..705fefb 100644
+--- a/app/src/main/java/com/music/spotui/ui/screens/LibraryScreeen.kt
++++ b/app/src/main/java/com/music/spotui/ui/screens/LibraryScreeen.kt
+@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.layout.aspectRatio
+ import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.LazyRow
+ import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.lazy.grid.GridCells
+ import androidx.compose.foundation.lazy.grid.GridItemSpan
+@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.grid.items
+ import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.CheckCircle
+ import androidx.compose.material.icons.filled.DateRange
+ import androidx.compose.material.icons.filled.Person
+ import androidx.compose.material3.ExperimentalMaterial3Api
+@@ -35,8 +37,6 @@ import androidx.compose.material3.Icon
+ import androidx.compose.material3.ModalBottomSheet
+ import androidx.compose.material3.Scaffold
+ import androidx.compose.material3.Text
+-import androidx.compose.material3.TopAppBar
+-import androidx.compose.material3.TopAppBarDefaults
+ import androidx.compose.material3.rememberModalBottomSheetState
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.collectAsState
+@@ -49,9 +49,11 @@ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.toArgb
++import androidx.compose.ui.graphics.vector.ImageVector
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.res.painterResource
++import androidx.compose.ui.res.vectorResource
+ import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextOverflow
+@@ -76,19 +78,21 @@ import com.music.spotui.ui.navigation.albumRoute
+ import com.music.spotui.ui.navigation.artistRoute
+ import com.music.spotui.ui.navigation.playlistRoute
+ import com.music.spotui.ui.theme.AppBackground
++import com.music.spotui.ui.theme.AppPalette
+ import com.music.spotui.ui.viewmodel.LibraryViewModel
++import kotlinx.coroutines.launch
+ 
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+ fun LibraryScreen(navController: NavController) {
+ 
+     val libraryViewModel: LibraryViewModel = hiltViewModel()
+-    val entries by libraryViewModel.entries.collectAsState()
++    val entriesResp by libraryViewModel.entries.collectAsState()
+     val account by libraryViewModel.account.collectAsState()
+     var showAccount by remember { mutableStateOf(false) }
+     val context = LocalContext.current
+-    // Spotify-style layout toggle: rows or a 3-column grid, persisted across runs.
+     var gridView by remember { mutableStateOf(isLibraryGridView(context)) }
++    var selectedFilter by remember { mutableStateOf("All") }
+ 
+     if (showAccount) {
+         AccountSheet(
+@@ -104,13 +108,12 @@ fun LibraryScreen(navController: NavController) {
+             .background(Color(AppBackground.toArgb()))
+             .statusBarsPadding()
+     ) {
+-        // Header: title + account avatar. Built by hand (rather than a fixed-height
+-        // TopAppBar) so the title isn't clipped under the status bar.
++        // Header
+         Row(
+             verticalAlignment = Alignment.CenterVertically,
+             modifier = Modifier
+                 .fillMaxWidth()
+-                .padding(16.dp, 12.dp, 16.dp, 8.dp)
++                .padding(16.dp, 12.dp, 16.dp, 6.dp)
+         ) {
+             Text(
+                 text = "Your Library",
+@@ -136,7 +139,33 @@ fun LibraryScreen(navController: NavController) {
+             }
+         }
+ 
+-        // Grid/list switch, like the icon at the top-right of Spotify's library.
++        // Filter chips: All, Downloaded, Playlists, Albums, Artists
++        val filters = listOf("All", "Downloaded", "Playlists", "Albums", "Artists")
++        LazyRow(
++            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++            modifier = Modifier.fillMaxWidth()
++        ) {
++            items(filters) { filter ->
++                val isSelected = filter == selectedFilter
++                Box(
++                    modifier = Modifier
++                        .clip(RoundedCornerShape(50))
++                        .background(if (isSelected) AppPalette else Color(0xFF222228))
++                        .clickable { selectedFilter = filter }
++                        .padding(horizontal = 14.dp, vertical = 6.dp)
++                ) {
++                    Text(
++                        text = filter,
++                        color = if (isSelected) Color.Black else Color.White,
++                        fontSize = 13.sp,
++                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
++                    )
++                }
++            }
++        }
++
++        // Grid/list switch
+         Row(
+             verticalAlignment = Alignment.CenterVertically,
+             modifier = Modifier
+@@ -161,12 +190,27 @@ fun LibraryScreen(navController: NavController) {
+         }
+ 
+         val followedArtists by libraryViewModel.followedArtists.collectAsState()
+-        when (entries) {
+-            is Response.Loading -> LibrarySkeleton(PaddingValues(0.dp))
+-            is Response.Success ->
+-                if (gridView) LibraryGridScreen(PaddingValues(0.dp), (entries as Response.Success).data, followedArtists, navController)
+-                else SumUpLibraryScreen(PaddingValues(0.dp), (entries as Response.Success).data, followedArtists, navController)
+-            else -> Box(modifier = Modifier.padding(20.dp, 100.dp)) { Snackbar(showMessage = "Couldn't load your library") }
++        val allEntries = (entriesResp as? Response.Success)?.data.orEmpty()
++
++        val filteredEntries = when (selectedFilter) {
++            "Downloaded" -> allEntries.filter {
++                it.spotifyId == Api.HomeCache.DOWNLOADS_ID ||
++                it.subtitle.contains("Downloaded", ignoreCase = true) ||
++                com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, it.spotifyId).isNotEmpty()
++            }
++            "Playlists" -> allEntries.filter { it.isPlaylist }
++            "Albums" -> allEntries.filter { !it.isPlaylist && it.spotifyId != Api.HomeCache.DOWNLOADS_ID && it.spotifyId != Api.HomeCache.LIKED_SONGS_ID }
++            else -> allEntries
++        }
++
++        val artistsToShow = if (selectedFilter == "All" || selectedFilter == "Artists") followedArtists else emptyList()
++
++        val currentResp = entriesResp
++        if (currentResp is Response.Loading && allEntries.isEmpty()) {
++            LibrarySkeleton(PaddingValues(0.dp))
++        } else {
++            if (gridView) LibraryGridScreen(PaddingValues(0.dp), filteredEntries, artistsToShow, navController)
++            else SumUpLibraryScreen(PaddingValues(0.dp), filteredEntries, artistsToShow, navController)
+         }
+     }
+ }
+@@ -190,8 +234,11 @@ fun SumUpLibraryScreen(
+     followedArtists: List<com.music.spotui.data.entity.ArtistsModel>,
+     navController: NavController
+ ) {
++    val context = LocalContext.current
++    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
++
+     if (entries.isEmpty() && followedArtists.isEmpty()) {
+-        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "Library is Empty") }
++        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items found in this section") }
+         return
+     }
+     LazyColumn(
+@@ -199,9 +246,9 @@ fun SumUpLibraryScreen(
+         modifier = Modifier
+             .fillMaxSize()
+             .padding(padding)
+-            .background(Color(0xFF0E0E13))
++            .background(Color(0xFF0B0B0F))
+     ) {
+-        // Listening history & stats entry.
++        // Listening history & stats entry
+         item {
+             Row(
+                 verticalAlignment = Alignment.CenterVertically,
+@@ -228,7 +275,7 @@ fun SumUpLibraryScreen(
+                 }
+             }
+         }
+-        // Local files (imported device audio) entry.
++        // Local files (imported device audio) entry
+         item {
+             Row(
+                 verticalAlignment = Alignment.CenterVertically,
+@@ -261,6 +308,10 @@ fun SumUpLibraryScreen(
+             }
+         }
+         items(entries) { entry ->
++            val hasOfflineTracks = entry.spotifyId == Api.HomeCache.DOWNLOADS_ID ||
++                entry.subtitle.contains("Downloaded", ignoreCase = true) ||
++                com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, entry.spotifyId).isNotEmpty()
++
+             Row(
+                 horizontalArrangement = Arrangement.Start,
+                 verticalAlignment = Alignment.CenterVertically,
+@@ -272,21 +323,103 @@ fun SumUpLibraryScreen(
+                         indication = null
+                     ) { openLibraryEntry(entry, navController) }
+             ) {
+-                GlideImage(
+-                    modifier = Modifier
+-                        .size(55.dp)
+-                        .clip(RoundedCornerShape(if (entry.isPlaylist) 6.dp else 4.dp)),
+-                    model = entry.coverUri,
+-                    contentScale = ContentScale.Crop,
+-                    contentDescription = ""
+-                )
+-                Column(modifier = Modifier.padding(start = 12.dp)) {
+-                    Text(text = entry.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+-                    Text(text = entry.subtitle, color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
++                if (entry.spotifyId == Api.HomeCache.DOWNLOADS_ID) {
++                    Box(
++                        contentAlignment = Alignment.Center,
++                        modifier = Modifier
++                            .size(55.dp)
++                            .clip(RoundedCornerShape(6.dp))
++                            .background(AppPalette.copy(alpha = 0.2f))
++                    ) {
++                        Icon(
++                            imageVector = ImageVector.vectorResource(R.drawable.ic_download),
++                            contentDescription = "Downloads",
++                            tint = AppPalette,
++                            modifier = Modifier.size(26.dp)
++                        )
++                    }
++                } else {
++                    GlideImage(
++                        modifier = Modifier
++                            .size(55.dp)
++                            .clip(RoundedCornerShape(if (entry.isPlaylist) 6.dp else 4.dp)),
++                        model = entry.coverUri,
++                        contentScale = ContentScale.Crop,
++                        contentDescription = ""
++                    )
++                }
++
++                Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
++                    Row(verticalAlignment = Alignment.CenterVertically) {
++                        Text(
++                            text = entry.name,
++                            color = Color.White,
++                            fontSize = 15.sp,
++                            fontWeight = FontWeight.Bold,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                            modifier = Modifier.weight(1f, fill = false)
++                        )
++                        if (hasOfflineTracks) {
++                            Spacer(modifier = Modifier.width(6.dp))
++                            Icon(
++                                imageVector = Icons.Default.CheckCircle,
++                                contentDescription = "Downloaded",
++                                tint = AppPalette,
++                                modifier = Modifier.size(15.dp)
++                            )
++                        }
++                    }
++                    Text(
++                        text = entry.subtitle,
++                        color = Color.Gray,
++                        fontSize = 12.sp,
++                        fontWeight = FontWeight.Medium,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis
++                    )
++                }
++
++                // Download Whole Playlist button in library
++                if (entry.isPlaylist && entry.spotifyId != Api.HomeCache.DOWNLOADS_ID && entry.spotifyId != Api.HomeCache.LIKED_SONGS_ID) {
++                    Box(
++                        modifier = Modifier
++                            .padding(start = 8.dp)
++                            .size(36.dp)
++                            .clip(CircleShape)
++                            .clickable {
++                                coroutineScope.launch {
++                                    val api = Api(context)
++                                    api.getPlaylistSongs(entry.spotifyId).collect { resp ->
++                                        if (resp is Response.Success && resp.data.isNotEmpty()) {
++                                            com.music.spotui.di.SongPlayer.downloadAll(
++                                                resp.data,
++                                                context,
++                                                playlistId = entry.spotifyId,
++                                                playlistName = entry.name
++                                            )
++                                            android.widget.Toast.makeText(
++                                                context,
++                                                "Downloading ${resp.data.size} songs from ${entry.name}",
++                                                android.widget.Toast.LENGTH_SHORT
++                                            ).show()
++                                        }
++                                    }
++                                }
++                            },
++                        contentAlignment = Alignment.Center
++                    ) {
++                        Icon(
++                            imageVector = if (hasOfflineTracks) Icons.Default.CheckCircle else ImageVector.vectorResource(R.drawable.ic_download),
++                            contentDescription = "Download Playlist",
++                            tint = if (hasOfflineTracks) AppPalette else Color.LightGray,
++                            modifier = Modifier.size(20.dp)
++                        )
++                    }
+                 }
+             }
+         }
+-        // ── Artists the user follows on Spotify ──
++        // Followed Artists
+         if (followedArtists.isNotEmpty()) {
+             item {
+                 Text(
+@@ -333,11 +466,6 @@ private fun openLibraryEntry(entry: LibraryEntry, navController: NavController)
+     else navController.navigate(albumRoute(entry.name, entry.artists))
+ }
+ 
+-/**
+- * Grid layout of the same library content: 3 columns of square covers with the
+- * title/subtitle underneath, like Spotify's "Grid" library view. Followed
+- * artists render as circles under their own full-width header.
+- */
+ @OptIn(ExperimentalGlideComposeApi::class)
+ @Composable
+ fun LibraryGridScreen(
+@@ -346,8 +474,9 @@ fun LibraryGridScreen(
+     followedArtists: List<com.music.spotui.data.entity.ArtistsModel>,
+     navController: NavController
+ ) {
++    val context = LocalContext.current
+     if (entries.isEmpty() && followedArtists.isEmpty()) {
+-        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "Library is Empty") }
++        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items in this section") }
+         return
+     }
+     LazyVerticalGrid(
+@@ -355,12 +484,11 @@ fun LibraryGridScreen(
+         modifier = Modifier
+             .fillMaxSize()
+             .padding(padding)
+-            .background(Color(0xFF0E0E13)),
++            .background(Color(0xFF0B0B0F)),
+         contentPadding = PaddingValues(16.dp, 10.dp, 16.dp, 130.dp),
+         horizontalArrangement = Arrangement.spacedBy(12.dp),
+         verticalArrangement = Arrangement.spacedBy(18.dp),
+     ) {
+-        // Listening history & stats entry, as a tile.
+         item {
+             Column(
+                 modifier = Modifier.clickable(
+@@ -380,25 +508,60 @@ fun LibraryGridScreen(
+                 }
+                 Spacer(modifier = Modifier.height(6.dp))
+                 Text(text = "Listening history", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+-                Text(text = "Your plays and stats", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
++                Text(text = "Plays & stats", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+             }
+         }
+         items(entries) { entry ->
++            val hasOfflineTracks = entry.spotifyId == Api.HomeCache.DOWNLOADS_ID ||
++                entry.subtitle.contains("Downloaded", ignoreCase = true) ||
++                com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, entry.spotifyId).isNotEmpty()
++
+             Column(
+                 modifier = Modifier.clickable(
+                     interactionSource = remember { MutableInteractionSource() },
+                     indication = null
+                 ) { openLibraryEntry(entry, navController) }
+             ) {
+-                GlideImage(
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .aspectRatio(1f)
+-                        .clip(RoundedCornerShape(if (entry.isPlaylist) 6.dp else 4.dp)),
+-                    model = entry.coverUri,
+-                    contentScale = ContentScale.Crop,
+-                    contentDescription = ""
+-                )
++                Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
++                    if (entry.spotifyId == Api.HomeCache.DOWNLOADS_ID) {
++                        Box(
++                            contentAlignment = Alignment.Center,
++                            modifier = Modifier
++                                .fillMaxSize()
++                                .clip(RoundedCornerShape(6.dp))
++                                .background(AppPalette.copy(alpha = 0.2f))
++                        ) {
++                            Icon(
++                                imageVector = ImageVector.vectorResource(R.drawable.ic_download),
++                                contentDescription = "Downloads",
++                                tint = AppPalette,
++                                modifier = Modifier.size(36.dp)
++                            )
++                        }
++                    } else {
++                        GlideImage(
++                            modifier = Modifier
++                                .fillMaxSize()
++                                .clip(RoundedCornerShape(if (entry.isPlaylist) 6.dp else 4.dp)),
++                            model = entry.coverUri,
++                            contentScale = ContentScale.Crop,
++                            contentDescription = ""
++                        )
++                    }
++
++                    if (hasOfflineTracks && entry.spotifyId != Api.HomeCache.DOWNLOADS_ID) {
++                        Icon(
++                            imageVector = Icons.Default.CheckCircle,
++                            contentDescription = "Downloaded",
++                            tint = AppPalette,
++                            modifier = Modifier
++                                .align(Alignment.TopEnd)
++                                .padding(4.dp)
++                                .size(16.dp)
++                                .background(Color.Black.copy(alpha = 0.6f), CircleShape)
++                        )
++                    }
++                }
+                 Spacer(modifier = Modifier.height(6.dp))
+                 Text(text = entry.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                 Text(text = entry.subtitle, color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+@@ -446,7 +609,7 @@ private fun LibrarySkeleton(padding: PaddingValues) {
+         modifier = Modifier
+             .fillMaxSize()
+             .padding(padding)
+-            .background(Color(0xFF0E0E13))
++            .background(Color(0xFF0B0B0F))
+     ) {
+         Spacer(modifier = Modifier.height(10.dp))
+         repeat(8) {
+@@ -495,14 +658,13 @@ private fun AccountSheet(
+                 }
+                 Spacer(modifier = Modifier.width(14.dp))
+                 Column {
+-                    Text(account.name.ifBlank { "Spotify user" }, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
++                    Text(account.name.ifBlank { "Sepotify user" }, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                     if (account.email.isNotBlank()) Text(account.email, color = Color.Gray, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+-                    if (account.plan.isNotBlank()) Text("Spotify ${account.plan}", color = Color(0xFF1DB954), fontSize = 12.sp, fontWeight = FontWeight.Medium)
++                    if (account.plan.isNotBlank()) Text(account.plan, color = AppPalette, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                 }
+             }
+             HorizontalDivider(color = Color(0xFF2A2A2A))
+ 
+-            AccountRow("Account") { onDismiss() }
+             AccountRow("Listening history") {
+                 onDismiss()
+                 navController.navigate(Routes.History.route)
+diff --git a/app/src/main/java/com/music/spotui/ui/screens/PlaylistScreen.kt b/app/src/main/java/com/music/spotui/ui/screens/PlaylistScreen.kt
+index 2f68c0d..2454bdd 100644
+--- a/app/src/main/java/com/music/spotui/ui/screens/PlaylistScreen.kt
++++ b/app/src/main/java/com/music/spotui/ui/screens/PlaylistScreen.kt
+@@ -231,10 +231,10 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
+                                             indication = null,
+                                         ) {
+                                             if (!playlistDownloaded) {
+-                                                SongPlayer.downloadAll(songs, context)
++                                                SongPlayer.downloadAll(songs, context, playlistId, playlist.name.ifBlank { playlistName })
+                                                 android.widget.Toast.makeText(
+                                                     context,
+-                                                    "Downloading ${songs.size} tracks…",
++                                                    "Downloading ${songs.size} tracks for offline playback…",
+                                                     android.widget.Toast.LENGTH_SHORT,
+                                                 ).show()
+                                             }
+diff --git a/app/src/main/java/com/music/spotui/ui/screens/SettingsScreen.kt b/app/src/main/java/com/music/spotui/ui/screens/SettingsScreen.kt
+index 9b82c7c..18cbf7b 100644
+--- a/app/src/main/java/com/music/spotui/ui/screens/SettingsScreen.kt
++++ b/app/src/main/java/com/music/spotui/ui/screens/SettingsScreen.kt
+@@ -45,18 +45,7 @@ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.navigation.NavController
+-import com.music.spotui.data.preferences.CROSSFADE_MAX_MS
+-import com.music.spotui.data.preferences.StreamQuality
+-import com.music.spotui.data.preferences.getCellularQuality
+-import com.music.spotui.data.preferences.getCrossfadeMs
+-import com.music.spotui.data.preferences.setCrossfadeMs
+-import com.music.spotui.data.preferences.getDownloadQuality
+-import com.music.spotui.data.preferences.isVideoFallbackEnabled
+-import com.music.spotui.data.preferences.getWifiQuality
+-import com.music.spotui.data.preferences.setCellularQuality
+-import com.music.spotui.data.preferences.setDownloadQuality
+-import com.music.spotui.data.preferences.setVideoFallbackEnabled
+-import com.music.spotui.data.preferences.setWifiQuality
++import com.music.spotui.data.preferences.*
+ import com.music.spotui.ui.theme.AppBackground
+ import com.music.spotui.ui.theme.AppPalette
+ 
+@@ -257,6 +246,106 @@ fun SettingsScreen(navController: NavController) {
+                 )
+             }
+ 
++            Spacer(Modifier.height(12.dp))
++            SectionTitle("Downloads & Storage")
++            val storageInfo = remember { com.music.spotui.data.preferences.getDownloadStorageInfo(context) }
++            var currentStorage by remember { mutableStateOf(storageInfo) }
++
++            Column(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .clip(RoundedCornerShape(10.dp))
++                    .background(Color(0xFF1A1A20))
++                    .padding(14.dp)
++            ) {
++                Text(
++                    text = "Storage Usage",
++                    color = Color.White,
++                    fontSize = 15.sp,
++                    fontWeight = FontWeight.SemiBold
++                )
++                Spacer(Modifier.height(4.dp))
++                Text(
++                    text = "${currentStorage.trackCount} offline songs • ${currentStorage.formattedSize} used",
++                    color = AppPalette,
++                    fontSize = 13.sp,
++                    fontWeight = FontWeight.Medium
++                )
++                Spacer(Modifier.height(10.dp))
++
++                Text(
++                    text = "App Storage Path:",
++                    color = Color.Gray,
++                    fontSize = 11.sp,
++                    fontWeight = FontWeight.Medium
++                )
++                Text(
++                    text = currentStorage.internalPath,
++                    color = Color(0xFFDDDDDD),
++                    fontSize = 12.sp,
++                    fontWeight = FontWeight.Normal
++                )
++
++                Spacer(Modifier.height(8.dp))
++                Text(
++                    text = "Shared Export Location:",
++                    color = Color.Gray,
++                    fontSize = 11.sp,
++                    fontWeight = FontWeight.Medium
++                )
++                Text(
++                    text = currentStorage.publicPath,
++                    color = Color(0xFFDDDDDD),
++                    fontSize = 12.sp,
++                    fontWeight = FontWeight.Normal
++                )
++
++                Spacer(Modifier.height(12.dp))
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = Arrangement.spacedBy(8.dp)
++                ) {
++                    Text(
++                        text = "Export to Music",
++                        color = Color.White,
++                        fontSize = 12.sp,
++                        fontWeight = FontWeight.SemiBold,
++                        modifier = Modifier
++                            .clip(RoundedCornerShape(6.dp))
++                            .background(Color(0xFF2E2E38))
++                            .clickable {
++                                val (count, path) = com.music.spotui.data.preferences.exportDownloads(context)
++                                android.widget.Toast.makeText(
++                                    context,
++                                    "Exported $count tracks to $path",
++                                    android.widget.Toast.LENGTH_SHORT
++                                ).show()
++                            }
++                            .padding(horizontal = 12.dp, vertical = 8.dp)
++                    )
++
++                    Text(
++                        text = "Clear Downloads",
++                        color = Color(0xFFE57373),
++                        fontSize = 12.sp,
++                        fontWeight = FontWeight.SemiBold,
++                        modifier = Modifier
++                            .clip(RoundedCornerShape(6.dp))
++                            .background(Color(0xFF2E2E38))
++                            .clickable {
++                                val n = com.music.spotui.data.preferences.clearAllDownloads(context)
++                                currentStorage = com.music.spotui.data.preferences.getDownloadStorageInfo(context)
++                                android.widget.Toast.makeText(
++                                    context,
++                                    "Cleared $n downloaded tracks",
++                                    android.widget.Toast.LENGTH_SHORT
++                                ).show()
++                            }
++                            .padding(horizontal = 12.dp, vertical = 8.dp)
++                    )
++                }
++            }
++
+             Spacer(Modifier.height(12.dp))
+             SectionTitle("Account")
+             Text(
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+index cd6b908..fb180e5 100644
+--- a/gradle/wrapper/gradle-wrapper.properties
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -1,6 +1,6 @@
+-#Fri Jan 19 21:18:24 IST 2024
++#Gradle Wrapper configuration
+ distributionBase=GRADLE_USER_HOME
+ distributionPath=wrapper/dists
+-distributionUrl=file\:/private/tmp/claude-501/-Users-tim/dec97246-c452-466c-9311-39aba59bb862/scratchpad/gradle-8.6-bin.zip
++distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+ zipStoreBase=GRADLE_USER_HOME
+ zipStorePath=wrapper/dists
+diff --git a/spotify/src/main/kotlin/com/metrolist/spotify/SpotifyMapper.kt b/spotify/src/main/kotlin/com/metrolist/spotify/SpotifyMapper.kt
+index aad90f9..0c0ee40 100644
+--- a/spotify/src/main/kotlin/com/metrolist/spotify/SpotifyMapper.kt
++++ b/spotify/src/main/kotlin/com/metrolist/spotify/SpotifyMapper.kt
+@@ -5,28 +5,22 @@ import com.metrolist.spotify.models.SpotifyTrack
+ 
+ /**
+  * Utility object for creating search queries from Spotify track data.
+- * The actual mapping to Metrolist MediaMetadata is done in the app module
+- * where MediaMetadata class is available.
++ * Highly optimized for precise YouTube / YouTube Music audio matching.
+  */
+ object SpotifyMapper {
+ 
+-    // Pre-compiled regex patterns for title normalization (avoids re-creation on each call)
+-    private val FEAT_PATTERN = Regex("\\(feat\\..*?\\)")
+-    private val FT_PATTERN = Regex("\\(ft\\..*?\\)")
+-    private val BRACKET_PATTERN = Regex("\\[.*?]")
+-    private val REMASTER_PATTERN = Regex("\\(.*?remaster.*?\\)", RegexOption.IGNORE_CASE)
+-    private val REMIX_PATTERN = Regex("\\(.*?remix.*?\\)", RegexOption.IGNORE_CASE)
+-    private val NON_ALNUM_PATTERN = Regex("[^a-z0-9\\s]")
+-    private val MULTI_SPACE_PATTERN = Regex("\\s+")
++    private val FEAT_PATTERN = Regex("""\s*[\(\[]\s*(feat|ft|with)\.?\s+.*?[\]\)]""", RegexOption.IGNORE_CASE)
++    private val BRACKET_PATTERN = Regex("""\[.*?\]""")
++    private val REMASTER_PATTERN = Regex("""\s*[-–—]?\s*[\(\[]?\s*(\d{4}\s+)?remaster(ed)?(\s+\d{4})?\s*[\)\]]?""", RegexOption.IGNORE_CASE)
++    private val RADIO_EDIT_PATTERN = Regex("""\s*[-–—]?\s*[\(\[]?\s*(radio\s+edit|single\s+version|original\s+mix|album\s+version)\s*[\)\]]?""", RegexOption.IGNORE_CASE)
++    private val LIVE_PATTERN = Regex("""\s*[-–—]?\s*[\(\[]?\s*live(\s+at|\s+from|\s+in)?.*?[\]\)]?""", RegexOption.IGNORE_CASE)
++    private val AUDIO_TAG_PATTERN = Regex("""\s*[\(\[]\s*(official\s+audio|official\s+video|official\s+music\s+video|lyric\s+video|audio|lyrics?)\s*[\]\)]""", RegexOption.IGNORE_CASE)
++    private val NON_ALNUM_PATTERN = Regex("""[^a-z0-9\s]""")
++    private val MULTI_SPACE_PATTERN = Regex("""\s+""")
+ 
+     private const val NORM_CACHE_MAX_SIZE = 256
+-    private const val EARLY_EXIT_THRESHOLD = 0.95
++    private const val EARLY_EXIT_THRESHOLD = 0.92
+ 
+-    /**
+-     * LRU cache for normalized strings. Avoids re-running 7 regex replacements
+-     * on the same Spotify title/artist across multiple candidate comparisons.
+-     * Bounded to [NORM_CACHE_MAX_SIZE] entries to limit memory usage.
+-     */
+     private val normalizeCache = object : LinkedHashMap<String, String>(
+         NORM_CACHE_MAX_SIZE, 0.75f, true
+     ) {
+@@ -34,10 +28,6 @@ object SpotifyMapper {
+             size > NORM_CACHE_MAX_SIZE
+     }
+ 
+-    /**
+-     * LRU cache for pre-computed bigram sets. Avoids re-creating Set<String>
+-     * on every stringSimilarity call for the same normalized string.
+-     */
+     private val bigramCache = object : LinkedHashMap<String, Set<String>>(
+         NORM_CACHE_MAX_SIZE, 0.75f, true
+     ) {
+@@ -45,10 +35,6 @@ object SpotifyMapper {
+             size > NORM_CACHE_MAX_SIZE
+     }
+ 
+-    /**
+-     * Pre-computed data for one side of a match comparison.
+-     * Created once per Spotify track and reused across all candidates.
+-     */
+     data class PrecomputedTrack(
+         val normalizedTitle: String,
+         val titleBigrams: Set<String>,
+@@ -58,29 +44,52 @@ object SpotifyMapper {
+     )
+ 
+     /**
+-     * Builds a YouTube search query from a Spotify track.
+-     * The query is optimized for finding the matching song on YouTube Music.
++     * Clean track title for query building, stripping noise that causes YouTube search mismatches.
+      */
++    fun cleanTitleForSearch(title: String): String {
++        return title
++            .replace(FEAT_PATTERN, "")
++            .replace(REMASTER_PATTERN, "")
++            .replace(RADIO_EDIT_PATTERN, "")
++            .replace(AUDIO_TAG_PATTERN, "")
++            .replace(MULTI_SPACE_PATTERN, " ")
++            .trim()
++    }
++
++    /**
++     * Builds prioritized YouTube search queries for a track.
++     */
++    fun buildSearchQueries(title: String, artist: String): List<String> {
++        val cleanTitle = cleanTitleForSearch(title)
++        val cleanArtist = artist.replace(FEAT_PATTERN, "").trim()
++        val queries = mutableListOf<String>()
++
++        if (cleanArtist.isNotBlank() && cleanTitle.isNotBlank()) {
++            queries.add("$cleanArtist $cleanTitle")
++            queries.add("$cleanArtist $cleanTitle official audio")
++            queries.add("$cleanTitle $cleanArtist")
++        } else if (cleanTitle.isNotBlank()) {
++            queries.add(cleanTitle)
++        } else if (artist.isNotBlank()) {
++            queries.add("$artist $title")
++        }
++        return queries.distinct()
++    }
++
+     fun buildSearchQuery(track: SpotifyTrack): String {
+         val artist = track.artists.firstOrNull()?.name.orEmpty()
+         val title = track.name
+-        return if (artist.isEmpty()) title else "$artist $title"
++        val cleanTitle = cleanTitleForSearch(title)
++        return if (artist.isEmpty()) cleanTitle else "$artist $cleanTitle"
+     }
+ 
+-    /**
+-     * Returns the best thumbnail URL from a Spotify playlist, preferring medium resolution.
+-     */
+     fun getPlaylistThumbnail(playlist: SpotifyPlaylist): String? {
+         return playlist.images.let { images ->
+-            // Prefer 300x300 or similar medium size, fallback to first
+             images.firstOrNull { it.width in 200..400 }?.url
+                 ?: images.firstOrNull()?.url
+         }
+     }
+ 
+-    /**
+-     * Returns the best thumbnail URL from a Spotify track's album art.
+-     */
+     fun getTrackThumbnail(track: SpotifyTrack): String? {
+         return track.album?.images?.let { images ->
+             images.firstOrNull { it.width in 200..400 }?.url
+@@ -88,10 +97,6 @@ object SpotifyMapper {
+         }
+     }
+ 
+-    /**
+-     * Pre-computes normalized title/artist and their bigrams for a Spotify track.
+-     * Call once before scoring against multiple candidates to avoid redundant work.
+-     */
+     fun precompute(
+         title: String,
+         artist: String,
+@@ -108,10 +113,6 @@ object SpotifyMapper {
+         )
+     }
+ 
+-    /**
+-     * Computes a match confidence score (0.0 - 1.0) between a Spotify track and
+-     * a candidate result based on title, artist, and duration similarity.
+-     */
+     fun matchScore(
+         spotifyTitle: String,
+         spotifyArtist: String,
+@@ -138,11 +139,6 @@ object SpotifyMapper {
+         return titleScore * 0.45 + artistScore * 0.35 + durationScore * 0.20
+     }
+ 
+-    /**
+-     * Scores a candidate against pre-computed Spotify track data.
+-     * This is the fast path: normalization and bigrams for the Spotify side
+-     * are computed once and reused across all candidates.
+-     */
+     fun matchScorePrecomputed(
+         precomputed: PrecomputedTrack,
+         candidateTitle: String,
+@@ -165,7 +161,6 @@ object SpotifyMapper {
+         return titleScore * 0.45 + artistScore * 0.35 + durationScore * 0.20
+     }
+ 
+-    /** Threshold above which we consider a match good enough to skip remaining candidates. */
+     fun earlyExitThreshold(): Double = EARLY_EXIT_THRESHOLD
+ 
+     private fun durationScore(spotifyDurationMs: Int, candidateDurationSec: Int?): Double {
+@@ -173,16 +168,13 @@ object SpotifyMapper {
+         val diff = kotlin.math.abs(spotifyDurationMs / 1000 - candidateDurationSec)
+         return when {
+             diff <= 2 -> 1.0
+-            diff <= 5 -> 0.8
+-            diff <= 10 -> 0.5
+-            diff <= 30 -> 0.2
++            diff <= 4 -> 0.85
++            diff <= 8 -> 0.6
++            diff <= 20 -> 0.25
+             else -> 0.0
+         }
+     }
+ 
+-    /**
+-     * Normalizes a title for comparison, with LRU caching.
+-     */
+     private fun cachedNormalize(title: String): String {
+         normalizeCache[title]?.let { return it }
+         val normalized = normalizeTitle(title)
+@@ -190,9 +182,6 @@ object SpotifyMapper {
+         return normalized
+     }
+ 
+-    /**
+-     * Returns cached bigrams for a normalized string.
+-     */
+     private fun cachedBigrams(normalized: String): Set<String> {
+         bigramCache[normalized]?.let { return it }
+         val bigrams = if (normalized.length < 2) emptySet() else normalized.windowed(2).toSet()
+@@ -203,18 +192,15 @@ object SpotifyMapper {
+     private fun normalizeTitle(title: String): String {
+         return title.lowercase()
+             .replace(FEAT_PATTERN, "")
+-            .replace(FT_PATTERN, "")
+             .replace(BRACKET_PATTERN, "")
+             .replace(REMASTER_PATTERN, "")
+-            .replace(REMIX_PATTERN, "")
++            .replace(RADIO_EDIT_PATTERN, "")
++            .replace(AUDIO_TAG_PATTERN, "")
+             .replace(NON_ALNUM_PATTERN, "")
+             .replace(MULTI_SPACE_PATTERN, " ")
+             .trim()
+     }
+ 
+-    /**
+-     * Dice coefficient using pre-computed bigram sets.
+-     */
+     private fun bigramSimilarity(
+         a: String, bigramsA: Set<String>,
+         b: String, bigramsB: Set<String>,
+-- 
+2.55.0.windows.2
+

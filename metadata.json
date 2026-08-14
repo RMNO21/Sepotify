@@ -1,0 +1,6 @@
+{
+  "name": "Sepotify",
+  "description": "A Spotify-styled music player with YouTube and lossless streaming support",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

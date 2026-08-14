@@ -1,0 +1,141 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="512dp"
+    android:height="512dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <!-- Solid Black Background -->
+    <path
+        android:pathData="M0,0h512v512h-512z"
+        android:fillColor="#000000" />
+
+    <!-- Outer Broken Circle: 3 Segmented Circular Arcs -->
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:rotation="-15">
+        <!-- Arc 1 (Top-Right) -->
+        <path
+            android:pathData="M 397,114 A 200,200 0 0,1 454,278"
+            android:strokeWidth="16"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#E62AF598" />
+                    <item android:offset="1.0" android:color="#E614C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Arc 2 (Bottom) -->
+        <path
+            android:pathData="M 379,412 A 200,200 0 0,1 146,422"
+            android:strokeWidth="16"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#E62AF598" />
+                    <item android:offset="1.0" android:color="#E614C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Arc 3 (Top-Left) -->
+        <path
+            android:pathData="M 68,290 A 200,200 0 0,1 234,57"
+            android:strokeWidth="16"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#E62AF598" />
+                    <item android:offset="1.0" android:color="#E614C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+
+    <!-- Center Three Soundwave Arcs -->
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:rotation="-6">
+        <!-- Top Arc (Largest) -->
+        <path
+            android:pathData="M 124,185 C 205,130 308,132 388,180"
+            android:strokeWidth="36"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#FF2AF598" />
+                    <item android:offset="0.5" android:color="#FF1ED760" />
+                    <item android:offset="1.0" android:color="#FF14C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Middle Arc -->
+        <path
+            android:pathData="M 150,256 C 220,208 300,210 362,250"
+            android:strokeWidth="32"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#FF2AF598" />
+                    <item android:offset="0.5" android:color="#FF1ED760" />
+                    <item android:offset="1.0" android:color="#FF14C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Bottom Arc (Smallest) -->
+        <path
+            android:pathData="M 178,325 C 234,288 294,290 334,320"
+            android:strokeWidth="28"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="512"
+                    android:endY="512"
+                    android:type="linear">
+                    <item android:offset="0.0" android:color="#FF2AF598" />
+                    <item android:offset="0.5" android:color="#FF1ED760" />
+                    <item android:offset="1.0" android:color="#FF14C752" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>

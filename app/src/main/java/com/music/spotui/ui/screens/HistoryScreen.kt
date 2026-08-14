@@ -1,0 +1,232 @@
+package com.music.spotui.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavController
+import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
+import com.bumptech.glide.integration.compose.GlideImage
+import com.bumptech.glide.integration.compose.placeholder
+import com.music.spotui.R
+import com.music.spotui.data.preferences.HistoryEntry
+import com.music.spotui.data.preferences.clearListeningHistory
+import com.music.spotui.data.preferences.getListeningHistory
+import com.music.spotui.data.preferences.removeListeningHistory
+import com.music.spotui.ui.theme.AppBackground
+import java.text.DateFormat
+import java.util.Date
+
+/**
+ * Listening history + simple stats (plays, top artists, top tracks), all local.
+ * Entries can be removed one by one (x) or the whole log cleared.
+ */
+@OptIn(ExperimentalGlideComposeApi::class)
+@Composable
+fun HistoryScreen(navController: NavController) {
+    val context = LocalContext.current
+    var history by remember { mutableStateOf(getListeningHistory(context)) }
+
+    val topArtists = remember(history) {
+        history.groupingBy { it.singer.substringBefore(",").trim() }
+            .eachCount().entries
+            .filter { it.key.isNotBlank() }
+            .sortedByDescending { it.value }
+            .take(5)
+    }
+    val topTracks = remember(history) {
+        history.groupingBy { "${it.title} — ${it.singer}" }
+            .eachCount().entries
+            .sortedByDescending { it.value }
+            .take(5)
+    }
+
+    Surface(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 130.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(AppBackground.toArgb()))
+                .statusBarsPadding()
+        ) {
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp, 16.dp, 16.dp, 8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(26.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { navController.navigateUp() },
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Text("Listening history", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (history.isNotEmpty()) {
+                        Text(
+                            "Clear all",
+                            color = Color(0xFFB3B3B3),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {
+                                clearListeningHistory(context)
+                                history = emptyList()
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (history.isEmpty()) {
+                item {
+                    Text(
+                        "Nothing here yet — play something!",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(16.dp, 32.dp),
+                    )
+                }
+            } else {
+                // ── Stats ──
+                item {
+                    Column(modifier = Modifier.padding(16.dp, 8.dp)) {
+                        Text("Stats", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Text("${history.size} plays logged", color = Color.Gray, fontSize = 13.sp)
+                        Spacer(Modifier.height(10.dp))
+                        if (topArtists.isNotEmpty()) {
+                            Text("Top artists", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            topArtists.forEachIndexed { i, e ->
+                                Text(
+                                    "${i + 1}. ${e.key} — ${e.value} plays",
+                                    color = Color(0xFFB3B3B3), fontSize = 13.sp,
+                                    modifier = Modifier.padding(top = 3.dp),
+                                )
+                            }
+                            Spacer(Modifier.height(10.dp))
+                        }
+                        if (topTracks.isNotEmpty()) {
+                            Text("Top tracks", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            topTracks.forEachIndexed { i, e ->
+                                Text(
+                                    "${i + 1}. ${e.key} — ${e.value} plays",
+                                    color = Color(0xFFB3B3B3), fontSize = 13.sp, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 3.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
+                    Text(
+                        "History",
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(16.dp, 14.dp, 16.dp, 4.dp),
+                    )
+                }
+                items(history.size) { i ->
+                    val entry = history[i]
+                    HistoryRow(entry) {
+                        removeListeningHistory(context, entry)
+                        history = getListeningHistory(context)
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(140.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalGlideComposeApi::class)
+@Composable
+private fun HistoryRow(entry: HistoryEntry, onRemove: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp, 6.dp),
+    ) {
+        GlideImage(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(4.dp)),
+            model = entry.image,
+            contentScale = ContentScale.Crop,
+            failure = placeholder(R.drawable.placeholder),
+            loading = placeholder(R.drawable.placeholder),
+            contentDescription = "",
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 10.dp, end = 8.dp),
+        ) {
+            Text(entry.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${entry.singer} • ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.ts))}",
+                color = Color.Gray, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Remove",
+            tint = Color(0xFFB3B3B3),
+            modifier = Modifier
+                .size(18.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onRemove() },
+        )
+    }
+}
