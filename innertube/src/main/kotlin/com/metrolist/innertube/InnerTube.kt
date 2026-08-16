@@ -61,7 +61,7 @@ class InnerTube {
 
     @OptIn(ExperimentalSerializationApi::class)
     private fun createClient() = HttpClient(OkHttp) {
-        expectSuccess = true
+        expectSuccess = false
 
         install(ContentNegotiation) {
             json(Json {
@@ -82,16 +82,18 @@ class InnerTube {
                 // Connection pool settings for better connection reuse
                 connectionPool(
                     okhttp3.ConnectionPool(
-                        10, // maxIdleConnections
+                        32, // maxIdleConnections
                         5, // keepAliveDuration
                         java.util.concurrent.TimeUnit.MINUTES
                     )
                 )
                 
                 // Timeout configurations
-                connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                
+                fastFallback(true)
                 
                 // Enable HTTP/2 for better performance
                 protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
@@ -131,7 +133,6 @@ class InnerTube {
         }
 
         defaultRequest {
-            url(YouTubeClient.API_URL_YOUTUBE_MUSIC)
             header("Accept", "application/json")
             // Use the user's locale instead of hardcoding en-US so region-specific
             // catalogs and language-matched recommendations are returned.
@@ -146,15 +147,18 @@ class InnerTube {
             append("X-Goog-Api-Format-Version", "1")
             append("X-YouTube-Client-Name", client.clientId /* Not a typo. The Client-Name header does contain the client id. */)
             append("X-YouTube-Client-Version", client.clientVersion)
-            append("X-Origin", YouTubeClient.ORIGIN_YOUTUBE_MUSIC)
-            append("Referer", YouTubeClient.REFERER_YOUTUBE_MUSIC)
+            if (client.clientName.startsWith("WEB") || client.clientName.startsWith("TV")) {
+                append("Origin", client.origin)
+                append("X-Origin", client.origin)
+                append("Referer", client.referer)
+            }
             visitorData?.let { append("X-Goog-Visitor-Id", it) }
             if (setLogin && client.loginSupported) {
                 cookie?.let { cookie ->
                     append("cookie", cookie)
                     if ("SAPISID" !in cookieMap) return@let
                     val currentTime = System.currentTimeMillis() / 1000
-                    val sapisidHash = sha1("$currentTime ${cookieMap["SAPISID"]} ${YouTubeClient.ORIGIN_YOUTUBE_MUSIC}")
+                    val sapisidHash = sha1("$currentTime ${cookieMap["SAPISID"]} ${client.origin}")
                     append("Authorization", "SAPISIDHASH ${currentTime}_${sapisidHash}")
                 }
             }
@@ -179,7 +183,8 @@ class InnerTube {
         while (true) {
             try {
                 return block()
-            } catch (e: IOException) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 attempt++
                 if (attempt >= maxAttempts) throw e
                 delay(currentDelay)
@@ -194,7 +199,7 @@ class InnerTube {
         params: String? = null,
         continuation: String? = null,
     ) = withRetry {
-        httpClient.post("search") {
+        httpClient.post(client.apiUrl + "search") {
             ytClient(client, setLogin = useLoginForBrowse)
             setBody(
                 SearchBody(
@@ -219,7 +224,7 @@ class InnerTube {
         signatureTimestamp: Int?,
         poToken: String? = null,
     ) = withRetry {
-        httpClient.post("player") {
+        httpClient.post(client.apiUrl + "player") {
             ytClient(client, setLogin = true)
             setBody(
                 PlayerBody(

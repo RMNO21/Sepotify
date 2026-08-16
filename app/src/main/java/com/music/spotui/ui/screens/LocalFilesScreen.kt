@@ -238,7 +238,7 @@ fun LocalFilesScreen(navController: NavController) {
                     )
                 }
 
-                Spacer(Modifier.height(80.dp))
+                Spacer(Modifier.height(160.dp))
             }
         }
     }

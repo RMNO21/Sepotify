@@ -323,7 +323,7 @@ fun LikedSongsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.padding(80.dp))
+            Spacer(modifier = Modifier.height(160.dp))
         }
 
     }

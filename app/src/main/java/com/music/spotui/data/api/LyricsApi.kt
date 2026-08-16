@@ -80,23 +80,97 @@ object LyricsApi {
         val primaryArtist = artist.substringBefore(",").trim()
         val cleaned = cleanTitle(title)
 
-        // 1) Spotify's own color-lyrics — the exact synced lyrics the official app
-        //    shows, keyed by track id, so no title/artist matching can go wrong.
-        // 2) LRCLIB fallback: exact get + fuzzy search fired CONCURRENTLY, then a
-        //    title-only search. Serial fallbacks used to stack 3 × 5s timeouts.
-        val result = fromSpotify(key) ?: kotlinx.coroutines.coroutineScope {
-            val exact = async(kotlinx.coroutines.Dispatchers.IO) {
-                getExact(cleaned, primaryArtist, album, durationSec)
+        // 1) Primary goal: fetch SYNCED (timed) lyrics across all primary sources
+        val syncedLyrics = fromSpotify(key)?.takeIf { it.synced }
+            ?: kotlinx.coroutines.coroutineScope {
+                val exact = async(kotlinx.coroutines.Dispatchers.IO) {
+                    getExact(cleaned, primaryArtist, album, durationSec)
+                }
+                val fuzzy = async(kotlinx.coroutines.Dispatchers.IO) {
+                    search(cleaned, primaryArtist, durationSec)
+                }
+                val titleOnly = async(kotlinx.coroutines.Dispatchers.IO) {
+                    searchTitleOnly(cleaned, primaryArtist, durationSec)
+                }
+                val combined = async(kotlinx.coroutines.Dispatchers.IO) {
+                    searchCombined("$cleaned $primaryArtist", durationSec)
+                }
+                exact.await()?.takeIf { it.synced }
+                    ?: fuzzy.await()?.takeIf { it.synced }
+                    ?: titleOnly.await()?.takeIf { it.synced }
+                    ?: combined.await()?.takeIf { it.synced }
             }
-            val fuzzy = async(kotlinx.coroutines.Dispatchers.IO) {
-                search(cleaned, primaryArtist, durationSec)
-            }
-            exact.await()
-                ?: fuzzy.await()
-                ?: searchTitleOnly(cleaned, primaryArtist, durationSec)
+            ?: fromLyrist(cleaned, primaryArtist)?.takeIf { it.synced }
+
+        if (syncedLyrics != null) {
+            cache[key] = syncedLyrics
+            return syncedLyrics
         }
-        cache[key] = result ?: Miss()
-        return result
+
+        // 2) Secondary fallback: if timed lyrics are not found, search multiple sources
+        // for plain (untimed) lyrics and show them without timestamps.
+        val plainLyrics = fromSpotify(key)
+            ?: getExact(cleaned, primaryArtist, album, durationSec)
+            ?: search(cleaned, primaryArtist, durationSec)
+            ?: searchTitleOnly(cleaned, primaryArtist, durationSec)
+            ?: searchCombined("$cleaned $primaryArtist", durationSec)
+            ?: fromLyrist(cleaned, primaryArtist)
+            ?: fromOvh(cleaned, primaryArtist)
+            ?: fromChartLyrics(cleaned, primaryArtist)
+
+        cache[key] = plainLyrics ?: Miss()
+        return plainLyrics
+    }
+
+    private fun fromOvh(title: String, artist: String): Lyrics? {
+        val url = "https://api.lyrics.ovh/v1/${enc(artist)}/${enc(title)}"
+        val body = httpGet(url) ?: return null
+        return runCatching {
+            val json = JSONObject(body)
+            val lyricsText = json.optString("lyrics").takeIf { it.isNotBlank() } ?: return@runCatching null
+            val plainLines = lyricsText.split("\n")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { LyricLine(0L, it) }
+            if (plainLines.isNotEmpty()) Lyrics(plainLines, synced = false) else null
+        }.getOrNull()
+    }
+
+    private fun fromChartLyrics(title: String, artist: String): Lyrics? {
+        val url = "http://api.chartlyrics.com/apiv1.asmx/SearchLyricDirect?artist=${enc(artist)}&song=${enc(title)}"
+        val body = httpGet(url) ?: return null
+        return runCatching {
+            val lyricTag = Regex("""<Lyric[^>]*>(.*?)</Lyric>""", RegexOption.DOT_MATCHES_ALL)
+            val match = lyricTag.find(body) ?: return@runCatching null
+            val rawText = match.groupValues[1]
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&")
+                .replace("&#10;", "\n")
+                .trim()
+            if (rawText.isBlank()) return@runCatching null
+            val plainLines = rawText.split("\n")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { LyricLine(0L, it) }
+            if (plainLines.isNotEmpty()) Lyrics(plainLines, synced = false) else null
+        }.getOrNull()
+    }
+
+    private fun fromLyrist(title: String, artist: String): Lyrics? {
+        val url = "https://lyrist.vercel.app/api/${enc(title)}/${enc(artist)}"
+        val body = httpGet(url) ?: return null
+        return runCatching {
+            val json = JSONObject(body)
+            val lyricsText = json.optString("lyrics").takeIf { it.isNotBlank() } ?: return@runCatching null
+            val lrcLines = parseLrc(lyricsText)
+            if (lrcLines.isNotEmpty()) {
+                Lyrics(lrcLines, synced = true)
+            } else {
+                val plainLines = lyricsText.split("\n").filter { it.isNotBlank() }.map { LyricLine(0L, it) }
+                if (plainLines.isNotEmpty()) Lyrics(plainLines, synced = false) else null
+            }
+        }.getOrNull()
     }
 
     private suspend fun fromSpotify(key: String): Lyrics? {
@@ -141,6 +215,9 @@ object LyricsApi {
      */
     private fun searchTitleOnly(title: String, artist: String, durationSec: Int): Lyrics? =
         searchUrl("$BASE/search?track_name=${enc(title)}", artist, durationSec)
+
+    private fun searchCombined(query: String, durationSec: Int): Lyrics? =
+        searchUrl("$BASE/search?q=${enc(query)}", null, durationSec)
 
     private fun searchUrl(url: String, preferArtist: String?, durationSec: Int): Lyrics? {
         val body = httpGet(url) ?: return null

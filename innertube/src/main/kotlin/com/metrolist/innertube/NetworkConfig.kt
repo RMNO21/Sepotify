@@ -31,7 +31,7 @@ object NetworkConfig {
         cacheDir: File? = null,
         enableCache: Boolean = true
     ): HttpClient = HttpClient(OkHttp) {
-        expectSuccess = true
+        expectSuccess = false
 
         install(ContentNegotiation) {
             json(Json {
@@ -59,6 +59,8 @@ object NetworkConfig {
                 connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 writeTimeout(WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                
+                fastFallback(true)
                 
                 // Retry configuration
                 retryOnConnectionFailure(true)

@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.music.spotui.data.entity.AlbumsModel
 import com.music.spotui.data.entity.SongsModel
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,6 +25,7 @@ data class DownloadMetadata(
     val filePath: String,
     val playlistId: String = "",
     val playlistName: String = "",
+    val isAlbum: Boolean = false,
     val downloadTimeMs: Long = System.currentTimeMillis(),
 )
 
@@ -60,6 +62,7 @@ private fun DownloadMetadata.toJson(): String = JSONObject().apply {
     put("filePath", filePath)
     put("playlistId", playlistId)
     put("playlistName", playlistName)
+    put("isAlbum", isAlbum)
     put("downloadTimeMs", downloadTimeMs)
 }.toString()
 
@@ -81,6 +84,7 @@ private fun parseMeta(json: String): DownloadMetadata? = runCatching {
         filePath = o.optString("filePath"),
         playlistId = o.optString("playlistId"),
         playlistName = o.optString("playlistName"),
+        isAlbum = o.optBoolean("isAlbum", false),
         downloadTimeMs = o.optLong("downloadTimeMs", System.currentTimeMillis()),
     )
 }.getOrNull()
@@ -91,18 +95,20 @@ fun addDownload(
     filePath: String,
     playlistId: String = "",
     playlistName: String = "",
+    isAlbum: Boolean = false,
 ) {
     val meta = DownloadMetadata(
         song = song,
         filePath = filePath,
         playlistId = playlistId,
         playlistName = playlistName,
+        isAlbum = isAlbum,
     )
     context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
         .putString(song.id.toString(), meta.toJson())
         .apply()
 
-    if (playlistId.isNotBlank()) {
+    if (playlistId.isNotBlank() && !isAlbum) {
         val plPrefs = context.getSharedPreferences(PREF_PLAYLIST_MAP, Context.MODE_PRIVATE)
         val existing = plPrefs.getStringSet(playlistId, emptySet()) ?: emptySet()
         plPrefs.edit()
@@ -145,6 +151,38 @@ fun getDownloadedSongsForPlaylist(context: Context, playlistId: String): List<So
         .map { it.song }
 }
 
+fun getDownloadedSongsForAlbum(context: Context, albumName: String, albumId: String = ""): List<SongsModel> {
+    if (albumName.isBlank() && albumId.isBlank()) return emptyList()
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    val normName = normalizeStr(albumName)
+    return prefs.all.values
+        .mapNotNull { (it as? String)?.let(::parseMeta) }
+        .filter { meta ->
+            meta.filePath.isNotBlank() && File(meta.filePath).exists() && (
+                (albumId.isNotBlank() && meta.playlistId == albumId) ||
+                (normName.isNotBlank() && (
+                    normalizeStr(meta.song.album) == normName ||
+                    normalizeStr(meta.playlistName) == normName ||
+                    (meta.isAlbum && normalizeStr(meta.playlistName) == normName) ||
+                    (normalizeStr(meta.song.album).isNotEmpty() && (
+                        normalizeStr(meta.song.album).contains(normName) ||
+                        normName.contains(normalizeStr(meta.song.album))
+                    ))
+                ))
+            )
+        }
+        .map { it.song }
+}
+
+fun isSongDownloaded(context: Context, song: SongsModel): Boolean {
+    if (isDownloaded(context, song.id.toString())) return true
+    if (song.spotifyTrackId.isNotBlank() && isDownloaded(context, song.spotifyTrackId)) return true
+    if (song.url.isNotBlank() && downloadedPathForQuery(context, song.url) != null) return true
+    if (song.spotifyTrackId.isNotBlank() && downloadedPathForQuery(context, "spotify:track:${song.spotifyTrackId}|${song.title} ${song.singer}") != null) return true
+    if (downloadedPathForQuery(context, "${song.title} ${song.singer}") != null) return true
+    return false
+}
+
 fun isPlaylistDownloaded(context: Context, playlistId: String, totalTracks: Int): Boolean {
     if (playlistId.isBlank() || totalTracks <= 0) return false
     val downloadedCount = getDownloadedSongsForPlaylist(context, playlistId).size
@@ -154,11 +192,20 @@ fun isPlaylistDownloaded(context: Context, playlistId: String, totalTracks: Int)
 /** Returns list of playlists that contain downloaded tracks with counts. */
 fun getDownloadedPlaylists(context: Context): List<DownloadedPlaylistInfo> {
     val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    val savedAlbumNames = getSavedAlbums(context).map { it.name.lowercase().trim() }.toSet()
+    val savedAlbumIds = getSavedAlbums(context).map { it.id.toString() }.toSet()
+
     val allMetas = prefs.all.values
         .mapNotNull { (it as? String)?.let(::parseMeta) }
         .filter { it.filePath.isNotBlank() && File(it.filePath).exists() }
 
-    val byPlaylist = allMetas.filter { it.playlistId.isNotBlank() }.groupBy { it.playlistId }
+    val byPlaylist = allMetas.filter { 
+        it.playlistId.isNotBlank() && 
+        !it.isAlbum && 
+        it.playlistId !in savedAlbumIds && 
+        it.playlistName.lowercase().trim() !in savedAlbumNames 
+    }.groupBy { it.playlistId }
+
     return byPlaylist.map { (plId, metas) ->
         val name = metas.firstOrNull()?.playlistName?.takeIf { it.isNotBlank() } ?: "Playlist"
         val cover = metas.firstOrNull()?.song?.coverUri.orEmpty()
@@ -169,6 +216,36 @@ fun getDownloadedPlaylists(context: Context): List<DownloadedPlaylistInfo> {
             downloadedTrackCount = metas.size,
             totalTrackCount = metas.size,
             isFullyDownloaded = true,
+        )
+    }
+}
+
+/** Returns list of albums that have downloaded tracks. */
+fun getDownloadedAlbums(context: Context): List<AlbumsModel> {
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    val allMetas = prefs.all.values
+        .mapNotNull { (it as? String)?.let(::parseMeta) }
+        .filter { it.filePath.isNotBlank() && File(it.filePath).exists() }
+
+    val byAlbum = allMetas.filter { it.isAlbum || (it.song.album.isNotBlank() && it.playlistId.isBlank()) }
+        .groupBy { 
+            val albumTitle = if (it.playlistName.isNotBlank() && it.isAlbum) it.playlistName else it.song.album
+            albumTitle.trim()
+        }
+
+    return byAlbum.mapNotNull { (albumTitle, metas) ->
+        if (albumTitle.isBlank()) return@mapNotNull null
+        val first = metas.first()
+        val artist = first.song.singer
+        val cover = metas.firstOrNull { it.song.coverUri.isNotBlank() }?.song?.coverUri.orEmpty()
+        val id = first.playlistId.toIntOrNull() ?: (albumTitle.hashCode() and 0x7fffffff)
+        AlbumsModel(
+            id = id,
+            name = albumTitle,
+            artists = artist,
+            coverUri = cover,
+            time = "${metas.size} tracks",
+            type = "album"
         )
     }
 }
@@ -340,3 +417,40 @@ private fun exportFile(context: Context, song: SongsModel, path: String): Boolea
     }
     true
 }.getOrDefault(false)
+
+private const val KEY_AUTO_DL_PLAYLISTS = "auto_dl_playlists"
+
+fun markPlaylistAutoDownload(context: Context, playlistId: String, autoDownload: Boolean) {
+    if (playlistId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    val set = prefs.getStringSet(KEY_AUTO_DL_PLAYLISTS, emptySet())?.toMutableSet() ?: mutableSetOf()
+    if (autoDownload) set.add(playlistId) else set.remove(playlistId)
+    prefs.edit().putStringSet(KEY_AUTO_DL_PLAYLISTS, set).apply()
+}
+
+fun isPlaylistAutoDownload(context: Context, playlistId: String): Boolean {
+    if (playlistId.isBlank()) return false
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    return prefs.getStringSet(KEY_AUTO_DL_PLAYLISTS, emptySet())?.contains(playlistId) == true
+}
+
+fun checkAndAutoDownloadPlaylistNewTracks(
+    context: Context,
+    playlistId: String,
+    playlistName: String,
+    songs: List<SongsModel>
+) {
+    if (playlistId.isBlank() || songs.isEmpty()) return
+    if (!isPlaylistAutoDownload(context, playlistId)) return
+    val undownloaded = songs.filter { !isSongDownloaded(context, it) }
+    if (undownloaded.isNotEmpty()) {
+        undownloaded.forEach { song ->
+            com.music.spotui.worker.DownloadWorker.enqueue(
+                context = context,
+                song = song,
+                playlistId = playlistId,
+                playlistName = playlistName
+            )
+        }
+    }
+}

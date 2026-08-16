@@ -77,7 +77,7 @@ fun HistoryScreen(navController: NavController) {
 
     Surface(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 130.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 160.dp),
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(AppBackground.toArgb()))

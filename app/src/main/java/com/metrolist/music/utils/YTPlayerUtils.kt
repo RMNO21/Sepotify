@@ -27,9 +27,6 @@ import com.metrolist.innertube.models.YouTubeClient.Companion.WEB_REMIX
 import com.metrolist.innertube.models.response.PlayerResponse
 import com.metrolist.music.constants.AudioQuality
 import com.metrolist.music.utils.cipher.CipherDeobfuscator
-import com.metrolist.music.utils.YTPlayerUtils.MAIN_CLIENT
-import com.metrolist.music.utils.YTPlayerUtils.STREAM_FALLBACK_CLIENTS
-import com.metrolist.music.utils.YTPlayerUtils.validateStatus
 import com.metrolist.music.utils.potoken.PoTokenGenerator
 import com.metrolist.music.utils.potoken.PoTokenResult
 import com.metrolist.music.utils.sabr.EjsNTransformSolver
@@ -43,27 +40,28 @@ object YTPlayerUtils {
 
     private val httpClient = OkHttpClient.Builder()
         .proxy(YouTube.proxy)
-        .connectTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        .fastFallback(true)
         .retryOnConnectionFailure(true)
         .build()
 
     private val poTokenGenerator = PoTokenGenerator()
 
-    private val MAIN_CLIENT: YouTubeClient = WEB_REMIX
+    private val MAIN_CLIENT: YouTubeClient = IOS
 
     private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
-        TVHTML5_SIMPLY_EMBEDDED_PLAYER,  // Try embedded player first for age-restricted content
-        TVHTML5,
-        ANDROID_VR_1_43_32,
         ANDROID_VR_1_61_48,
+        ANDROID_VR_1_43_32,
         ANDROID_CREATOR,
+        TVHTML5_SIMPLY_EMBEDDED_PLAYER,  // Try embedded player for age-restricted content
         IPADOS,
         ANDROID_VR_NO_AUTH,
+        WEB_REMIX,
         MOBILE,
-        IOS,
         WEB,
+        TVHTML5,
         WEB_CREATOR
     )
     data class PlaybackData(
@@ -76,7 +74,7 @@ object YTPlayerUtils {
     )
     /**
      * Custom player response intended to use for playback.
-     * Metadata like audioConfig and videoDetails are from [MAIN_CLIENT].
+     * Metadata like audioConfig and videoDetails are from [MAIN_CLIENT] or fallback.
      * Format & stream can be from [MAIN_CLIENT] or [STREAM_FALLBACK_CLIENTS].
      */
     suspend fun playerResponseForPlayback(
@@ -125,12 +123,12 @@ object YTPlayerUtils {
             Timber.tag(TAG).w("PoToken unavailable — skipping MAIN_CLIENT and using fallback chain directly")
         }
 
-        // Try WEB_REMIX with signature timestamp and poToken (same as before)
+        // Try MAIN_CLIENT with signature timestamp and poToken (safely without throwing)
         Timber.tag(logTag).d("Attempting to get player response using MAIN_CLIENT: ${MAIN_CLIENT.clientName}")
-        var mainPlayerResponse = YouTube.player(videoId, playlistId, MAIN_CLIENT, signatureTimestamp.timestamp, poToken?.playerRequestPoToken).getOrThrow()
+        var mainPlayerResponse = YouTube.player(videoId, playlistId, MAIN_CLIENT, signatureTimestamp.timestamp, poToken?.playerRequestPoToken).getOrNull()
 
         // Debug uploaded track response
-        if (isUploadedTrack || playlistId?.contains("MLPT") == true) {
+        if (mainPlayerResponse != null && (isUploadedTrack || playlistId?.contains("MLPT") == true)) {
             println("[PLAYBACK_DEBUG] Main player response status: ${mainPlayerResponse.playabilityStatus.status}")
             println("[PLAYBACK_DEBUG] Playability reason: ${mainPlayerResponse.playabilityStatus.reason}")
             println("[PLAYBACK_DEBUG] Video details: title=${mainPlayerResponse.videoDetails?.title}, videoId=${mainPlayerResponse.videoDetails?.videoId}")
@@ -141,8 +139,8 @@ object YTPlayerUtils {
         var usedAgeRestrictedClient: YouTubeClient? = null
         val wasOriginallyAgeRestricted: Boolean
 
-        // Check if WEB_REMIX response indicates age-restricted
-        val mainStatus = mainPlayerResponse.playabilityStatus.status
+        // Check if response indicates age-restricted
+        val mainStatus = mainPlayerResponse?.playabilityStatus?.status
         val isAgeRestrictedFromResponse = mainStatus in listOf("AGE_CHECK_REQUIRED", "AGE_VERIFICATION_REQUIRED", "LOGIN_REQUIRED", "CONTENT_CHECK_REQUIRED")
         wasOriginallyAgeRestricted = isAgeRestrictedFromResponse
 
@@ -158,11 +156,6 @@ object YTPlayerUtils {
             }
         }
 
-        // If we still don't have a valid response, throw
-
-        val audioConfig = mainPlayerResponse.playerConfig?.audioConfig
-        val videoDetails = mainPlayerResponse.videoDetails
-        val playbackTracking = mainPlayerResponse.playbackTracking
         var format: PlayerResponse.StreamingData.Format? = null
         var streamUrl: String? = null
         var streamExpiresInSeconds: Int? = null
@@ -170,7 +163,7 @@ object YTPlayerUtils {
         val retryMainPlayerResponse: PlayerResponse? = if (usedAgeRestrictedClient != null) mainPlayerResponse else null
 
         // Check current status
-        val currentStatus = mainPlayerResponse.playabilityStatus.status
+        val currentStatus = mainPlayerResponse?.playabilityStatus?.status
         val isAgeRestricted = currentStatus in listOf("AGE_CHECK_REQUIRED", "AGE_VERIFICATION_REQUIRED", "LOGIN_REQUIRED", "CONTENT_CHECK_REQUIRED")
 
         if (isAgeRestricted) {
@@ -180,15 +173,14 @@ object YTPlayerUtils {
         }
 
         // Check if this is a privately owned track (uploaded song)
-        val isPrivateTrack = mainPlayerResponse.videoDetails?.musicVideoType == "MUSIC_VIDEO_TYPE_PRIVATELY_OWNED_TRACK"
+        val isPrivateTrack = mainPlayerResponse?.videoDetails?.musicVideoType == "MUSIC_VIDEO_TYPE_PRIVATELY_OWNED_TRACK"
 
         // For private tracks: use TVHTML5 (index 1) with PoToken + n-transform
-        // For age-restricted: skip main client, start with fallbacks
-        // For normal content: standard order
+        // For age-restricted or when main client failed: skip main client, start with fallbacks
+        // For normal content: start with main client (index -1)
         val startIndex = when {
-            isPrivateTrack -> 1  // TVHTML5
-            isAgeRestricted -> 0
-            skipMainClient -> 0  // MAIN_CLIENT streams unplayable without PoToken
+            isPrivateTrack -> 1
+            isAgeRestricted || mainPlayerResponse?.playabilityStatus?.status != "OK" || skipMainClient -> 0
             else -> -1
         }
 
@@ -350,7 +342,6 @@ object YTPlayerUtils {
                 val isPrivatelyOwned = streamPlayerResponse.videoDetails?.musicVideoType == "MUSIC_VIDEO_TYPE_PRIVATELY_OWNED_TRACK"
 
                 if (clientIndex == STREAM_FALLBACK_CLIENTS.size - 1 || isPrivatelyOwned) {
-                    /** skip [validateStatus] for last client or private tracks */
                     if (isPrivatelyOwned) {
                         Timber.tag(logTag).d("Skipping validation for privately owned track: ${currentClient.clientName}")
                         println("[PLAYBACK_DEBUG] Using stream without validation for PRIVATELY_OWNED_TRACK")
@@ -376,53 +367,32 @@ object YTPlayerUtils {
             }
         }
 
-        if (streamPlayerResponse == null) {
-            Timber.tag(logTag).e("Bad stream player response - all clients failed")
+        val effectiveResponse = streamPlayerResponse ?: mainPlayerResponse
+        if (effectiveResponse == null || format == null || streamUrl == null) {
+            Timber.tag(logTag).e("Bad stream player response - all clients failed for videoId=$videoId")
             if (isUploadedTrack) {
                 println("[PLAYBACK_DEBUG] FAILURE: All clients failed for uploaded track videoId=$videoId")
             }
-            throw Exception("Bad stream player response")
-        }
-
-        if (streamPlayerResponse.playabilityStatus.status != "OK") {
-            val errorReason = streamPlayerResponse.playabilityStatus.reason
-            Timber.tag(logTag).e("Playability status not OK: $errorReason")
-            if (isUploadedTrack) {
-                println("[PLAYBACK_DEBUG] FAILURE: Playability not OK for uploaded track - status=${streamPlayerResponse.playabilityStatus.status}, reason=$errorReason")
-            }
             throw PlaybackException(
-                errorReason,
+                "Unable to resolve playable audio stream for videoId=$videoId",
                 null,
                 PlaybackException.ERROR_CODE_REMOTE_ERROR
             )
         }
 
-        if (streamExpiresInSeconds == null) {
-            Timber.tag(logTag).e("Missing stream expire time")
-            throw Exception("Missing stream expire time")
-        }
-
-        if (format == null) {
-            Timber.tag(logTag).e("Could not find format")
-            throw Exception("Could not find format")
-        }
-
-        if (streamUrl == null) {
-            Timber.tag(logTag).e("Could not find stream url")
-            throw Exception("Could not find stream url")
-        }
+        val audioConfig = effectiveResponse.playerConfig?.audioConfig
+        val videoDetails = effectiveResponse.videoDetails
+        val playbackTracking = effectiveResponse.playbackTracking
+        val expiresIn = streamExpiresInSeconds ?: effectiveResponse.streamingData?.expiresInSeconds ?: 21600
 
         Timber.tag(logTag).d("Successfully obtained playback data with format: ${format.mimeType}, bitrate: ${format.bitrate}")
-        if (isUploadedTrack) {
-            println("[PLAYBACK_DEBUG] SUCCESS: Got playback data for uploaded track - format=${format.mimeType}, streamUrl=${streamUrl.take(100)}...")
-        }
         PlaybackData(
-            audioConfig,
-            videoDetails,
-            playbackTracking,
-            format,
-            streamUrl,
-            streamExpiresInSeconds,
+            audioConfig = audioConfig,
+            videoDetails = videoDetails,
+            playbackTracking = playbackTracking,
+            format = format,
+            streamUrl = streamUrl,
+            streamExpiresInSeconds = expiresIn,
         )
     }.onFailure { e ->
         println("[PLAYBACK_DEBUG] EXCEPTION during playback for videoId=$videoId: ${e::class.simpleName}: ${e.message}")
@@ -449,15 +419,19 @@ object YTPlayerUtils {
     ): PlayerResponse.StreamingData.Format? {
         Timber.tag(logTag).d("Finding format with audioQuality: $audioQuality, network metered: ${connectivityManager.isActiveNetworkMetered}")
 
-        val format = playerResponse.streamingData?.adaptiveFormats
-            ?.filter { it.isAudio && it.isOriginal }
-            ?.maxByOrNull {
-                it.bitrate * when (audioQuality) {
-                    AudioQuality.AUTO -> if (connectivityManager.isActiveNetworkMetered) -1 else 1
-                    AudioQuality.HIGH -> 1
-                    AudioQuality.LOW -> -1
-                } + (if (it.mimeType.startsWith("audio/webm")) 10240 else 0) // prefer opus stream
-            }
+        val adaptive = playerResponse.streamingData?.adaptiveFormats.orEmpty()
+        val direct = playerResponse.streamingData?.formats.orEmpty()
+        val allAudio = (adaptive + direct).filter { it.isAudio || it.mimeType.startsWith("audio/") }
+
+        val originalAudio = allAudio.filter { it.isOriginal }.ifEmpty { allAudio }
+
+        val format = originalAudio.maxByOrNull {
+            it.bitrate * when (audioQuality) {
+                AudioQuality.AUTO -> if (connectivityManager.isActiveNetworkMetered) -1 else 1
+                AudioQuality.HIGH -> 1
+                AudioQuality.LOW -> -1
+            } + (if (it.mimeType.startsWith("audio/webm") || it.mimeType.contains("opus")) 10240 else 0)
+        } ?: allAudio.firstOrNull()
 
         if (format != null) {
             Timber.tag(logTag).d("Selected format: ${format.mimeType}, bitrate: ${format.bitrate}")
@@ -479,11 +453,22 @@ object YTPlayerUtils {
      *    killing the client here just cascades us down the fallback chain for no reason
      *  - other HTTP codes (4xx/5xx) → invalid
      */
+    /**
+     * Checks if the stream url returns a successful status.
+     * Uses a lightweight range GET request (0-1023 bytes) matching ExoPlayer's fetch behavior.
+     *  - 200 / 206 / 2xx → valid stream
+     *  - 403 / 404 / 410 / 4xx / 5xx → invalid stream (triggers fallback client)
+     *  - IOException (transient socket timeout/reset) → optimistic acceptance
+     */
     private fun validateStatus(url: String): Boolean {
         Timber.tag(logTag).d("Validating stream URL status")
         try {
             val requestBuilder = okhttp3.Request.Builder()
-                .head()
+                .get()
+                .addHeader("User-Agent", YouTubeClient.USER_AGENT_WEB)
+                .addHeader("Accept", "*/*")
+                .addHeader("Connection", "keep-alive")
+                .addHeader("Range", "bytes=0-1023")
                 .url(url)
 
             YouTube.cookie?.let { cookie ->
@@ -491,15 +476,15 @@ object YTPlayerUtils {
             }
 
             val response = httpClient.newCall(requestBuilder.build()).execute()
-            response.close()
             val code = response.code
-            val accepted = response.isSuccessful || code == 405 || code == 403 || code == 410
+            response.close()
+            val accepted = response.isSuccessful || code in 200..399 || code == 405
             Timber.tag(logTag).d("Stream URL validation: code=$code accepted=$accepted")
             return accepted
         } catch (e: java.io.IOException) {
-            // Network timeout / reset while HEAD-probing. The stream URL itself may still
+            // Network timeout / reset while probing. The stream URL itself may still
             // be fine — let ExoPlayer attempt GET rather than burning a fallback client.
-            Timber.tag(logTag).w(e, "Stream URL HEAD probe failed (IO); accepting optimistically")
+            Timber.tag(logTag).w(e, "Stream URL probe failed (IO); accepting optimistically")
             return true
         } catch (e: Exception) {
             Timber.tag(logTag).e(e, "Stream URL validation failed with exception")

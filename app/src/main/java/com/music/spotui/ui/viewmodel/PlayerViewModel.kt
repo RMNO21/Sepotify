@@ -31,10 +31,17 @@ class PlayerViewModel @Inject constructor(private val currentSongState: CurrentS
     val currentSongPlayingState: State<Boolean> get() = currentSongState.playingState
     val currentSongIndex : State<Int> get() = currentSongState.songIndex
     val currentSongAlbum : State<String> get() = currentSongState.album
-
     val currentSongId : State<Int> get() = currentSongState.songId
-
     val queue : State<List<SongsModel>> get() = currentSongState.queue
+
+    val titleFlow: StateFlow<String> get() = currentSongState.titleFlow
+    val singerFlow: StateFlow<String> get() = currentSongState.singerFlow
+    val coverUriFlow: StateFlow<String> get() = currentSongState.coverUriFlow
+    val playingStateFlow: StateFlow<Boolean> get() = currentSongState.playingStateFlow
+    val shuffleFlow: StateFlow<Boolean> get() = currentSongState.shuffleFlow
+    val repeatFlow: StateFlow<Boolean> get() = currentSongState.repeatFlow
+    val likeStateFlow: StateFlow<Boolean> get() = currentSongState.likeStateFlow
+    val queueFlow: StateFlow<List<SongsModel>> get() = currentSongState.queueFlow
 
     fun updateQueue(songs: List<SongsModel>) = currentSongState.updateQueue(songs)
 

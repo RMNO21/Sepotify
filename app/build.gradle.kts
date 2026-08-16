@@ -12,11 +12,11 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.music.spotui"
-        minSdk = 26
+        applicationId = "com.sepotify.music.app"
+        minSdk = 24
         targetSdk = 34
-        versionCode = 20
-        versionName = "2.0"
+        versionCode = 100
+        versionName = "2.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -48,6 +48,11 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
         }
     }
 }
@@ -109,6 +114,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.3.1")
     // media session + system media notification (lock screen / notification center)
     implementation("androidx.media3:media3-session:1.3.1")
+
+    //WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     //Storage Access Framework folder enumeration (local music import)
     implementation("androidx.documentfile:documentfile:1.0.1")

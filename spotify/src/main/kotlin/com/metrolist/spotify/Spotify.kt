@@ -390,20 +390,40 @@ object Spotify {
             ?: ""
         val trackId = uri.substringAfterLast(":")
 
+        val podcastObj = trackData.obj("podcastV2")?.obj("data")
+            ?: trackData.obj("podcast")
+            ?: trackData.obj("show")
+
         val artists =
             trackData.obj("artists")?.arr("items")?.mapNotNull { elem ->
                 parseGqlSimpleArtist(elem.jsonObject)
+            }?.ifEmpty {
+                val publisherName = podcastObj?.obj("publisher")?.str("name")
+                    ?: podcastObj?.str("publisher")
+                    ?: podcastObj?.str("name")
+                if (!publisherName.isNullOrBlank()) {
+                    val pUri = podcastObj?.str("uri") ?: ""
+                    listOf(SpotifySimpleArtist(id = pUri.substringAfterLast(":"), name = publisherName, uri = pUri.ifEmpty { null }))
+                } else emptyList()
             } ?: emptyList()
 
         val album =
             albumOverride ?: run {
                 val albumData = trackData.obj("albumOfTrack")
-                val albumUri = albumData?.str("uri") ?: ""
+                val albumUri = albumData?.str("uri") ?: podcastObj?.str("uri") ?: ""
                 val albumId = albumUri.substringAfterLast(":")
+                val coverSources = albumData?.obj("coverArt")?.arr("sources")
+                    ?: trackData.obj("coverArt")?.arr("sources")
+                    ?: podcastObj?.obj("coverArt")?.arr("sources")
+                    ?: trackData.arr("images")
+                    ?: podcastObj?.arr("images")
+                val name = albumData?.str("name")
+                    ?: podcastObj?.str("name")
+                    ?: ""
                 SpotifySimpleAlbum(
                     id = albumId,
-                    name = albumData?.str("name") ?: "",
-                    images = parseGqlImages(albumData?.obj("coverArt")?.arr("sources")),
+                    name = name,
+                    images = parseGqlImages(coverSources),
                     uri = albumUri.ifEmpty { null },
                 )
             }
@@ -1247,6 +1267,31 @@ object Spotify {
     suspend fun show(showId: String): Result<com.metrolist.spotify.models.SpotifyShow> =
         runCatching {
             authenticatedGet<com.metrolist.spotify.models.SpotifyShow>("shows/$showId") {
+                parameter("market", "from_token")
+            }
+        }
+
+    suspend fun episode(episodeId: String): Result<com.metrolist.spotify.models.SpotifyEpisode> =
+        runCatching {
+            authenticatedGet<com.metrolist.spotify.models.SpotifyEpisode>("episodes/$episodeId") {
+                parameter("market", "from_token")
+            }
+        }
+
+    suspend fun myEpisodes(limit: Int = 50, offset: Int = 0): Result<SpotifyPaging<com.metrolist.spotify.models.SpotifySavedEpisode>> =
+        runCatching {
+            authenticatedGet<SpotifyPaging<com.metrolist.spotify.models.SpotifySavedEpisode>>("me/episodes") {
+                parameter("limit", limit)
+                parameter("offset", offset)
+                parameter("market", "from_token")
+            }
+        }
+
+    suspend fun myShows(limit: Int = 50, offset: Int = 0): Result<SpotifyPaging<com.metrolist.spotify.models.SpotifySavedShow>> =
+        runCatching {
+            authenticatedGet<SpotifyPaging<com.metrolist.spotify.models.SpotifySavedShow>>("me/shows") {
+                parameter("limit", limit)
+                parameter("offset", offset)
                 parameter("market", "from_token")
             }
         }

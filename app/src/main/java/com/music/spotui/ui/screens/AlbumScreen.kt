@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -69,12 +70,15 @@ import com.music.spotui.R
 import com.music.spotui.data.api.Response
 import com.music.spotui.data.entity.AlbumsModel
 import com.music.spotui.data.entity.SongsModel
+import com.music.spotui.data.api.Api
 import com.music.spotui.data.preferences.addLikedAlbumId
 import com.music.spotui.data.preferences.addLikedSongId
 import com.music.spotui.data.preferences.isAlbumLiked
 import com.music.spotui.data.preferences.isSongLiked
+import com.music.spotui.data.preferences.removeLikedAlbum
 import com.music.spotui.data.preferences.removeLikedAlbumId
 import com.music.spotui.data.preferences.removeLikedSongId
+import com.music.spotui.data.preferences.saveLikedAlbum
 import com.music.spotui.di.Palette
 import com.music.spotui.di.SongPlayer
 import com.music.spotui.ui.components.LikedSongsScreen
@@ -155,26 +159,38 @@ fun SumUpAlbumScreen(
     }
 
     val albumByName : Map<String, List<AlbumsModel>> = albums.groupBy { it.name }
-    // The album may not be in the cached new-releases list (e.g. opened from
-    // search) — fall back to a model built from the album's first track.
-    val album : List<AlbumsModel> = albumByName[albumName]
-        ?: listOf(
-            AlbumsModel(
-                id = albumName.hashCode() and 0x7fffffff,
-                artists = albumSongs.firstOrNull()?.singer ?: "",
-                coverUri = albumSongs.firstOrNull()?.coverUri ?: "",
-                name = albumName,
-                time = "",
-            )
+    val rawAlbum = albumByName[albumName]?.firstOrNull()
+    val resolvedCover = rawAlbum?.coverUri?.takeIf { it.isNotBlank() }
+        ?: albumSongs.firstOrNull()?.coverUri.orEmpty()
+    val resolvedArtist = rawAlbum?.artists?.takeIf { it.isNotBlank() }
+        ?: albumSongs.firstOrNull()?.singer.orEmpty()
+    val currentAlbum = rawAlbum?.copy(coverUri = resolvedCover, artists = resolvedArtist)
+        ?: AlbumsModel(
+            id = albumName.hashCode() and 0x7fffffff,
+            artists = resolvedArtist,
+            coverUri = resolvedCover,
+            name = albumName,
+            time = "",
         )
+    val album : List<AlbumsModel> = listOf(currentAlbum)
+
     var dominentColor by remember {
         mutableStateOf(Color(AppBackground.toArgb()))
     }
-    Palette().extractSecondColorFromCoverUrl(context = context, album[0].coverUri){ color ->
+    val effectiveCover = currentAlbum.coverUri.ifBlank { albumSongs.firstOrNull()?.coverUri.orEmpty() }
+    Palette().extractSecondColorFromCoverUrl(context = context, effectiveCover){ color ->
         dominentColor = color
     }
 
-    var isAlbumLiked by remember { mutableStateOf( isAlbumLiked(context, album[0].id.toString())) }
+    var isAlbumLiked by remember(currentAlbum.id) { mutableStateOf(isAlbumLiked(context, currentAlbum.id.toString())) }
+
+    // Auto-update saved album cover if it was saved when cover wasn't ready yet
+    LaunchedEffect(effectiveCover) {
+        if (effectiveCover.isNotBlank() && isAlbumLiked(context, currentAlbum.id.toString())) {
+            saveLikedAlbum(context, currentAlbum.copy(coverUri = effectiveCover))
+            Api.HomeCache.library = null
+        }
+    }
 
     var snackbarMessage by remember {
         mutableStateOf("")
@@ -327,13 +343,14 @@ fun SumUpAlbumScreen(
                                         indication = null
                                     ) {
                                         if (isAlbumLiked) {
-                                            removeLikedAlbumId(context, album[0].id.toString())
+                                            removeLikedAlbum(context, currentAlbum.id.toString())
                                             snackbarMessage = "Removed from Library"
                                         } else {
-                                            addLikedAlbumId(context, album[0].id.toString())
+                                            saveLikedAlbum(context, currentAlbum)
                                             snackbarMessage = "Added to Library"
                                         }
-                                        isAlbumLiked = isAlbumLiked(context, album[0].id.toString())
+                                        Api.HomeCache.library = null
+                                        isAlbumLiked = isAlbumLiked(context, currentAlbum.id.toString())
                                         snackbarVisible = true
 
                                     },
@@ -398,7 +415,8 @@ fun SumUpAlbumScreen(
                                                     albumSongs,
                                                     context,
                                                     album[0].id.toString(),
-                                                    albumName
+                                                    albumName,
+                                                    isAlbum = true,
                                                 )
                                                 snackbarMessage = "Downloading ${albumSongs.size} tracks…"
                                                 snackbarVisible = true
@@ -418,17 +436,23 @@ fun SumUpAlbumScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null,
                                     ) {
-                                        albumViewModel.startShuffled(albumSongs)?.let { first ->
-                                            SongPlayer.playSong(first.url, context)
-                                            albumViewModel.updateSongState(
-                                                first.coverUri,
-                                                first.title,
-                                                first.singer,
-                                                true,
-                                                first.id,
-                                                0,
-                                                albumName,
-                                            )
+                                        val isOffline = !com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
+                                        val playable = if (isOffline) albumSongs.filter { com.music.spotui.data.preferences.isSongDownloaded(context, it) } else albumSongs
+                                        if (playable.isEmpty()) {
+                                            android.widget.Toast.makeText(context, "No downloaded songs available offline", android.widget.Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            albumViewModel.startShuffled(playable)?.let { first ->
+                                                SongPlayer.playSong(first.url, context)
+                                                albumViewModel.updateSongState(
+                                                    first.coverUri,
+                                                    first.title,
+                                                    first.singer,
+                                                    true,
+                                                    first.id,
+                                                    0,
+                                                    albumName,
+                                                )
+                                            }
                                         }
                                     },
                                 contentDescription = "Shuffle play",
@@ -439,7 +463,8 @@ fun SumUpAlbumScreen(
                         // Always visible: pause when playing, resume when this
                         // album's track is paused, otherwise start from the top.
                         if (albumSongs.isNotEmpty()) {
-                            val playing = albumViewModel.currentSongPlayingState.value
+                            val isCurrentSongInAlbum = albumSongs.any { it.id == albumViewModel.currentSongId.value }
+                            val isCurrentPlaying = albumViewModel.currentSongPlayingState.value && isCurrentSongInAlbum
                             androidx.compose.foundation.layout.Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
@@ -450,19 +475,23 @@ fun SumUpAlbumScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
+                                        val isOffline = !com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
+                                        val playable = if (isOffline) albumSongs.filter { com.music.spotui.data.preferences.isSongDownloaded(context, it) } else albumSongs
                                         when {
-                                            playing -> albumViewModel.setPlaying(false)
-                                            albumSongs.any { it.id == albumViewModel.currentSongId.value } ->
-                                                albumViewModel.setPlaying(true)
+                                            isCurrentPlaying -> albumViewModel.setPlaying(false)
+                                            isCurrentSongInAlbum -> albumViewModel.setPlaying(true)
+                                            playable.isEmpty() -> {
+                                                android.widget.Toast.makeText(context, "No downloaded songs available offline", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
                                             else -> {
-                                                albumViewModel.updateQueue(albumSongs)
-                                                SongPlayer.playSong(albumSongs[0].url, context)
+                                                albumViewModel.updateQueue(playable)
+                                                SongPlayer.playSong(playable[0].url, context)
                                                 albumViewModel.updateSongState(
-                                                    albumSongs[0].coverUri,
-                                                    albumSongs[0].title,
-                                                    albumSongs[0].singer,
+                                                    playable[0].coverUri,
+                                                    playable[0].title,
+                                                    playable[0].singer,
                                                     true,
-                                                    albumSongs[0].id,
+                                                    playable[0].id,
                                                     0,
                                                     albumName
                                                 )
@@ -475,9 +504,9 @@ fun SumUpAlbumScreen(
                                         .size(25.dp),
                                     tint = Color.Black,
                                     painter = painterResource(
-                                        id = if (playing) R.drawable.ic_playing else R.drawable.play_svgrepo_com,
+                                        id = if (isCurrentPlaying) R.drawable.ic_playing else R.drawable.play_svgrepo_com,
                                     ),
-                                    contentDescription = if (playing) "Pause" else "Play")
+                                    contentDescription = if (isCurrentPlaying) "Pause" else "Play")
                             }
                         }
                     }
@@ -555,6 +584,11 @@ fun SumUpAlbumScreen(
                         isLiked = isSongLiked(context, albumSongs[song].id.toString())
                     }
                     val songId = albumSongs[song].id
+                    val isOffline = !com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
+                    val isTrackDownloaded = remember(songId, isOffline) {
+                        com.music.spotui.data.preferences.isSongDownloaded(context, albumSongs[song])
+                    }
+                    val rowAlpha = if (isOffline && !isTrackDownloaded) 0.38f else 1.0f
 
                     val currentPlayingIndicatorColor = if(songId == albumViewModel.currentSongId.value) Color(AppPalette.toArgb()) else Color.White
 
@@ -564,22 +598,28 @@ fun SumUpAlbumScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(20.dp, 8.dp)
+                            .alpha(rowAlpha)
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
                                 onLongClick = { menuSong = albumSongs[song] },
                                 onClick = {
-                                    albumViewModel.updateQueue(albumSongs)
-                                    SongPlayer.playSong(albumSongs[song].url, context)
-                                    albumViewModel.updateSongState(
-                                        albumSongs[song].coverUri,
-                                        albumSongs[song].title,
-                                        albumSongs[song].singer,
-                                        true,
-                                        albumSongs[song].id,
-                                        song,
-                                        albumName
-                                    )
+                                    if (isOffline && !isTrackDownloaded) {
+                                        android.widget.Toast.makeText(context, "Song is unavailable offline", android.widget.Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val playable = if (isOffline) albumSongs.filter { com.music.spotui.data.preferences.isSongDownloaded(context, it) } else albumSongs
+                                        albumViewModel.updateQueue(playable)
+                                        SongPlayer.playSong(albumSongs[song].url, context)
+                                        albumViewModel.updateSongState(
+                                            albumSongs[song].coverUri,
+                                            albumSongs[song].title,
+                                            albumSongs[song].singer,
+                                            true,
+                                            albumSongs[song].id,
+                                            song,
+                                            albumName
+                                        )
+                                    }
                                 },
                             )
                     ) {
@@ -589,12 +629,6 @@ fun SumUpAlbumScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.width(200.dp)
                         ) {
-//                        GlideImage(
-//                            modifier = Modifier.size(60.dp),
-//                            model = albumSongs[song].coverUri,
-//                            contentScale = ContentScale.Crop,
-//                            contentDescription = ""
-//                        )
                             Column {
                                 Text(
                                     text = albumSongs[song].title,
@@ -604,14 +638,24 @@ fun SumUpAlbumScreen(
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
-                                Text(
-                                    text = albumSongs[song].singer,
-                                    color = Color.Gray,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isTrackDownloaded) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            tint = AppPalette,
+                                            modifier = Modifier.size(13.dp).padding(end = 4.dp),
+                                            contentDescription = "Downloaded",
+                                        )
+                                    }
+                                    Text(
+                                        text = albumSongs[song].singer,
+                                        color = Color.Gray,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
 
@@ -649,7 +693,7 @@ fun SumUpAlbumScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.padding(80.dp))
+            Spacer(modifier = Modifier.height(160.dp))
         }
 
     }

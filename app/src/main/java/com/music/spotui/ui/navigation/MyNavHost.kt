@@ -68,11 +68,20 @@ fun MyNavHost(
     // and arm the player to resume from the saved position on the first play tap.
     LaunchedEffect(Unit) {
         if (playerViewModel.currentSongTitle.value.isBlank()) {
-            com.music.spotui.data.preferences.loadLastPlayback(context)?.let { (song, positionMs) ->
-                playerViewModel.updateQueue(listOf(song))
+            com.music.spotui.data.preferences.loadLastPlaybackSession(context)?.let { session ->
+                val song = session.currentSong
+                val queue = session.queue.ifEmpty { listOf(song) }
+                playerViewModel.updateQueue(queue)
                 playerViewModel.updateSongState(
-                    song.coverUri, song.title, song.singer, false, song.id, 0, song.album)
-                com.music.spotui.di.SongPlayer.setRestorePoint(song.url, positionMs)
+                    coverUri = song.coverUri,
+                    title = song.title,
+                    singer = song.singer,
+                    playingState = false,
+                    songId = song.id,
+                    songIndex = session.songIndex.coerceIn(0, queue.size - 1),
+                    album = session.contextName.ifBlank { song.album },
+                )
+                com.music.spotui.di.SongPlayer.setRestorePoint(song.url, session.positionMs)
             }
         }
     }

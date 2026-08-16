@@ -297,7 +297,8 @@ fun LikedSongsScreen(navController: NavController) {
                             // Always visible: pause when playing, resume when this
                             // list's track is paused, otherwise start from the top.
                             if (songs.isNotEmpty()) {
-                                val playing = likedSongsViewModel.currentSongPlayingState.value
+                                val isCurrentSongInLiked = songs.any { it.id == likedSongsViewModel.currentSongId.value }
+                                val isCurrentPlaying = likedSongsViewModel.currentSongPlayingState.value && isCurrentSongInLiked
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
@@ -309,9 +310,8 @@ fun LikedSongsScreen(navController: NavController) {
                                             indication = null
                                         ) {
                                             when {
-                                                playing -> likedSongsViewModel.setPlaying(false)
-                                                songs.any { it.id == likedSongsViewModel.currentSongId.value } ->
-                                                    likedSongsViewModel.setPlaying(true)
+                                                isCurrentPlaying -> likedSongsViewModel.setPlaying(false)
+                                                isCurrentSongInLiked -> likedSongsViewModel.setPlaying(true)
                                                 else -> {
                                                     likedSongsViewModel.updateQueue(songs)
                                                     SongPlayer.playSong(songs[0].url, context)
@@ -332,9 +332,9 @@ fun LikedSongsScreen(navController: NavController) {
                                         modifier = Modifier.size(25.dp),
                                         tint = Color.Black,
                                         painter = painterResource(
-                                            id = if (playing) R.drawable.ic_playing else R.drawable.play_svgrepo_com,
+                                            id = if (isCurrentPlaying) R.drawable.ic_playing else R.drawable.play_svgrepo_com,
                                         ),
-                                        contentDescription = if (playing) "Pause" else "Play"
+                                        contentDescription = if (isCurrentPlaying) "Pause" else "Play"
                                     )
                                 }
                             }
@@ -451,7 +451,7 @@ fun LikedSongsScreen(navController: NavController) {
                     }
                 }
 
-                item { Spacer(modifier = Modifier.padding(80.dp)) }
+                item { Spacer(modifier = Modifier.height(160.dp)) }
             }
         }
     }

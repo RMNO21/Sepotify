@@ -49,17 +49,47 @@ class Api @Inject constructor(
     }
 
     private fun SpotifyTrack.toSongModel(): SongsModel {
-        val singer = artists.joinToString(", ") { it.name }
+        val isEpisode = id.startsWith("episode:") || uri?.contains("episode") == true
+        val cleanId = id.removePrefix("episode:")
+        val singer = artists.joinToString(", ") { it.name }.ifBlank {
+            if (isEpisode) album?.name.orEmpty().ifBlank { "Podcast" } else "Unknown Artist"
+        }
         val cover = album?.images?.firstOrNull()?.url ?: ""
+        val playUrl = if (isEpisode) {
+            "episode:$cleanId|${name.take(60)} $singer"
+        } else {
+            com.music.spotui.di.SongPlayer.buildSpotifyPlayQuery(cleanId, name, singer)
+        }
         return SongsModel(
-            id = stableId("track:$id"),
+            id = stableId(if (isEpisode) "episode:$cleanId" else "track:$cleanId"),
             title = name.take(128),
             album = album?.name ?: "",
             singer = singer,
             coverUri = cover,
-            url = com.music.spotui.di.SongPlayer.buildSpotifyPlayQuery(id, name, singer),
-            spotifyTrackId = id,
+            url = playUrl,
+            spotifyTrackId = cleanId,
             explicit = explicit,
+            durationMs = durationMs,
+        )
+    }
+
+    private fun com.metrolist.spotify.models.SpotifyEpisode.toSongModel(): SongsModel {
+        val showName = show?.name.orEmpty()
+        val publisher = show?.publisher.orEmpty()
+        val singer = if (showName.isNotBlank() && publisher.isNotBlank() && showName != publisher) {
+            "$showName • $publisher"
+        } else {
+            showName.ifBlank { publisher.ifBlank { description?.take(80) ?: "Podcast" } }
+        }
+        val cover = images.firstOrNull()?.url ?: show?.images?.firstOrNull()?.url ?: ""
+        return SongsModel(
+            id = stableId("episode:$id"),
+            title = name.take(128),
+            album = releaseDate ?: showName,
+            singer = singer,
+            coverUri = cover,
+            url = "episode:$id|${name.take(60)} $showName",
+            spotifyTrackId = id,
             durationMs = durationMs,
         )
     }
@@ -247,67 +277,123 @@ class Api @Inject constructor(
         if (query.isBlank()) {
             emit(Response.Success(SearchResults())); return@flow
         }
+        val norm = query.lowercase().trim()
+        val downloadedMatches = com.music.spotui.data.preferences.getDownloadedSongs(context)
+            .filter { it.title.lowercase().contains(norm) || it.singer.lowercase().contains(norm) || it.album.lowercase().contains(norm) }
+
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            val norm = query.lowercase().trim()
-            val matches = com.music.spotui.data.preferences.getDownloadedSongs(context)
-                .filter { it.title.lowercase().contains(norm) || it.singer.lowercase().contains(norm) }
-            emit(Response.Success(SearchResults(songs = matches)))
+            emit(Response.Success(SearchResults(songs = downloadedMatches)))
             return@flow
         }
         Spotify.search(query, types = listOf("track", "album", "artist"), limit = 20).fold(
             onSuccess = { res ->
                 val podcasts = runCatching { Spotify.searchPodcasts(query, limit = 12).getOrNull() }.getOrNull()
+                val apiSongs = res.tracks?.items.orEmpty().map { it.toSongModel() }
+                val mergedSongs = (downloadedMatches + apiSongs).distinctBy { it.id }
                 emit(Response.Success(SearchResults(
-                    songs = res.tracks?.items.orEmpty().map { it.toSongModel() },
+                    songs = mergedSongs,
                     albums = res.albums?.items.orEmpty().map { it.toAlbumModel() },
                     artists = res.artists?.items.orEmpty().map { it.toArtistModel() },
                     shows = podcasts?.shows?.items.orEmpty().map { p ->
                         PodcastModel(
                             id = p.id,
                             name = p.name,
-                            publisher = p.publisher,
+                            publisher = p.publisher.orEmpty(),
                             coverUri = p.images.firstOrNull()?.url ?: "",
                         )
                     },
                 )))
             },
-            onFailure = { Log.e("Api", "searchEverything failed", it); emit(Response.Error(it.message ?: "error")) },
+            onFailure = { 
+                Log.e("Api", "searchEverything failed", it)
+                if (downloadedMatches.isNotEmpty()) {
+                    emit(Response.Success(SearchResults(songs = downloadedMatches)))
+                } else {
+                    emit(Response.Error(it.message ?: "error")) 
+                }
+            },
         )
     }
 
     suspend fun getShowEpisodes(showId: String): Flow<Response<List<SongsModel>>> = flow {
         emit(Response.Loading())
-        if (showId.isBlank()) { emit(Response.Success(emptyList())); return@flow }
-        if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
-        Spotify.showEpisodes(showId, limit = 50).fold(
+        val cleanId = showId.removePrefix("show:")
+        val cached = OfflineCache.getPlaylistSongs(context, showId) ?: OfflineCache.getPlaylistSongs(context, cleanId)
+        val downloaded = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, cleanId)
+        val initialList = if (!cached.isNullOrEmpty()) cached else downloaded
+        if (initialList.isNotEmpty()) {
+            emit(Response.Success(initialList))
+        }
+
+        if (!NetworkMonitor.isOnlineNow(context)) {
+            if (initialList.isEmpty()) emit(Response.Success(emptyList()))
+            return@flow
+        }
+
+        if (cleanId == "your-episodes" || cleanId == "episodes" || cleanId.contains("your-episodes", ignoreCase = true)) {
+            if (!SpotifyTokenProvider.ensureToken(context)) { 
+                if (initialList.isEmpty()) emit(Response.Error("Spotify not authenticated")) 
+                return@flow 
+            }
+            Spotify.myEpisodes(limit = 50).fold(
+                onSuccess = { paging ->
+                    val songs = paging.items.mapNotNull { it.episode?.toSongModel() }
+                    emit(Response.Success(songs))
+                    OfflineCache.savePlaylistSongs(context, showId, songs)
+                },
+                onFailure = { 
+                    Log.e("Api", "myEpisodes failed", it)
+                    if (initialList.isEmpty()) emit(Response.Error(it.message ?: "error")) 
+                },
+            )
+            return@flow
+        }
+        if (cleanId.isBlank()) { 
+            if (initialList.isEmpty()) emit(Response.Success(emptyList()))
+            return@flow 
+        }
+        if (!SpotifyTokenProvider.ensureToken(context)) { 
+            if (initialList.isEmpty()) emit(Response.Error("Spotify not authenticated")) 
+            return@flow 
+        }
+        Spotify.showEpisodes(cleanId, limit = 50).fold(
             onSuccess = { paging ->
-                emit(Response.Success(paging.items.map { ep ->
-                    SongsModel(
-                        id = stableId("episode:${ep.id}"),
-                        title = ep.name,
-                        album = ep.releaseDate,
-                        singer = ep.description.take(120),
-                        coverUri = ep.images.firstOrNull()?.url ?: "",
-                        url = "episode:${ep.id}",
-                        spotifyTrackId = ep.id,
-                        durationMs = ep.durationMs,
-                    )
-                }))
+                val songs = paging.items.map { ep -> ep.toSongModel() }
+                emit(Response.Success(songs))
+                OfflineCache.savePlaylistSongs(context, showId, songs)
             },
-            onFailure = { Log.e("Api", "getShowEpisodes failed", it); emit(Response.Error(it.message ?: "error")) },
+            onFailure = { 
+                Log.e("Api", "getShowEpisodes failed", it)
+                if (initialList.isEmpty()) emit(Response.Error(it.message ?: "error")) 
+            },
         )
     }
 
     suspend fun getShow(showId: String): Flow<Response<PodcastModel>> = flow {
         emit(Response.Loading())
-        if (showId.isBlank()) { emit(Response.Error("missing show id")); return@flow }
+        val cleanId = showId.removePrefix("show:")
+        if (cleanId == "your-episodes" || cleanId == "episodes" || cleanId.contains("your-episodes", ignoreCase = true)) {
+            val episodes = if (SpotifyTokenProvider.ensureToken(context)) {
+                Spotify.myEpisodes(limit = 1).getOrNull()?.items.orEmpty()
+            } else emptyList()
+            val cover = episodes.firstOrNull()?.episode?.images?.firstOrNull()?.url
+                ?: "https://misc.scdn.co/your-episodes/your-episodes-640.png"
+            emit(Response.Success(PodcastModel(
+                id = "your-episodes",
+                name = "Your Episodes",
+                publisher = "Saved podcast episodes",
+                coverUri = cover,
+            )))
+            return@flow
+        }
+        if (cleanId.isBlank()) { emit(Response.Error("missing show id")); return@flow }
         if (!SpotifyTokenProvider.ensureToken(context)) { emit(Response.Error("Spotify not authenticated")); return@flow }
-        Spotify.show(showId).fold(
+        Spotify.show(cleanId).fold(
             onSuccess = { s ->
                 emit(Response.Success(PodcastModel(
                     id = s.id,
                     name = s.name,
-                    publisher = s.publisher,
+                    publisher = s.publisher.orEmpty(),
                     coverUri = s.images.firstOrNull()?.url ?: "",
                 )))
             },
@@ -446,11 +532,19 @@ class Api @Inject constructor(
     suspend fun getAlbumSongs(albumName: String, artist: String = ""): Flow<Response<List<SongsModel>>> = flow {
         emit(Response.Loading())
         if (albumName.isBlank()) { emit(Response.Success(emptyList())); return@flow }
+        val albumKey = "album_${albumName.lowercase().trim()}"
+        val downloaded = com.music.spotui.data.preferences.getDownloadedSongsForAlbum(context, albumName)
+        val cachedForAlbum = OfflineCache.getPlaylistSongs(context, albumKey)
+
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            // Check downloaded tracks for this album
-            val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
-                .filter { it.album.equals(albumName, ignoreCase = true) }
-            emit(Response.Success(downloaded))
+            // Check downloaded tracks for this album or cached tracks
+            if (cachedForAlbum != null && cachedForAlbum.isNotEmpty()) {
+                emit(Response.Success(cachedForAlbum))
+            } else if (downloaded.isNotEmpty()) {
+                emit(Response.Success(downloaded))
+            } else {
+                emit(Response.Success(emptyList()))
+            }
             return@flow
         }
         val candidates = Spotify.search(
@@ -459,10 +553,37 @@ class Api @Inject constructor(
             limit = 10,
         ).getOrNull()?.albums?.items.orEmpty()
         val albumId = pickAlbum(candidates, albumName, artist)?.id
-        if (albumId.isNullOrBlank()) { emit(Response.Success(emptyList())); return@flow }
+        if (albumId.isNullOrBlank()) {
+            if (cachedForAlbum != null && cachedForAlbum.isNotEmpty()) {
+                emit(Response.Success(cachedForAlbum))
+            } else if (downloaded.isNotEmpty()) {
+                emit(Response.Success(downloaded))
+            } else {
+                emit(Response.Success(emptyList()))
+            }
+            return@flow
+        }
         Spotify.album(albumId).fold(
-            onSuccess = { full -> emit(Response.Success(full.tracks?.items.orEmpty().map { it.toSongModel() })) },
-            onFailure = { Log.e("Api", "getAlbumSongs failed", it); emit(Response.Error(it.message ?: "error")) },
+            onSuccess = { full ->
+                val albumCover = full.images.firstOrNull()?.url.orEmpty()
+                val albumArtist = full.artists.joinToString(", ") { it.name }
+                val tracks = full.tracks?.items.orEmpty().map { track ->
+                    val song = track.toSongModel()
+                    song.copy(
+                        coverUri = if (song.coverUri.isBlank()) albumCover else song.coverUri,
+                        album = if (song.album.isBlank()) full.name else song.album,
+                        singer = if (song.singer.isBlank()) albumArtist else song.singer,
+                    )
+                }
+                OfflineCache.savePlaylistSongs(context, albumKey, tracks)
+                emit(Response.Success(tracks))
+            },
+            onFailure = {
+                Log.e("Api", "getAlbumSongs failed", it)
+                if (cachedForAlbum != null && cachedForAlbum.isNotEmpty()) emit(Response.Success(cachedForAlbum))
+                else if (downloaded.isNotEmpty()) emit(Response.Success(downloaded))
+                else emit(Response.Success(emptyList()))
+            },
         )
     }
 
@@ -489,18 +610,51 @@ class Api @Inject constructor(
             }
         }
 
+        // Custom or saved playlists (Daily Mixes, liked Spotify playlists, custom playlists)
+        if (com.music.spotui.data.preferences.isCustomPlaylist(context, playlistId)) {
+            val customSongs = com.music.spotui.data.preferences.getCustomPlaylistSongs(context, playlistId)
+            emit(Response.Success(customSongs))
+            return@flow
+        }
+
         // Check if we have offline songs for this playlist
         val offlineForPlaylist = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
         val cachedForPlaylist = OfflineCache.getPlaylistSongs(context, playlistId)
 
+        if (!cachedForPlaylist.isNullOrEmpty()) {
+            emit(Response.Success(cachedForPlaylist))
+        } else if (offlineForPlaylist.isNotEmpty()) {
+            emit(Response.Success(offlineForPlaylist))
+        }
+
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            if (offlineForPlaylist.isNotEmpty()) {
-                emit(Response.Success(offlineForPlaylist))
-            } else if (cachedForPlaylist != null) {
-                emit(Response.Success(cachedForPlaylist))
-            } else {
+            if (cachedForPlaylist.isNullOrEmpty() && offlineForPlaylist.isEmpty()) {
                 emit(Response.Success(emptyList()))
             }
+            return@flow
+        }
+
+        if (playlistId == "your-episodes" || playlistId == "episodes" || playlistId.contains("your-episodes", ignoreCase = true)) {
+            if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
+                if (cachedForPlaylist != null && cachedForPlaylist.isNotEmpty()) {
+                    emit(Response.Success(cachedForPlaylist))
+                } else {
+                    emit(Response.Success(emptyList()))
+                }
+                return@flow
+            }
+            Spotify.myEpisodes(limit = 50).fold(
+                onSuccess = { res ->
+                    val songs = res.items.mapNotNull { it.episode?.toSongModel() }
+                    emit(Response.Success(songs))
+                    OfflineCache.savePlaylistSongs(context, playlistId, songs)
+                },
+                onFailure = {
+                    Log.e("Api", "myEpisodes failed", it)
+                    if (cachedForPlaylist != null) emit(Response.Success(cachedForPlaylist))
+                    else emit(Response.Error(it.message ?: "Failed to load episodes"))
+                }
+            )
             return@flow
         }
 
@@ -519,10 +673,19 @@ class Api @Inject constructor(
                 OfflineCache.savePlaylistSongs(context, playlistId, songs)
             },
             onFailure = {
-                Log.e("Api", "getPlaylistSongs failed", it)
-                if (offlineForPlaylist.isNotEmpty()) emit(Response.Success(offlineForPlaylist))
-                else if (cachedForPlaylist != null) emit(Response.Success(cachedForPlaylist))
-                else emit(Response.Error(it.message ?: "error"))
+                Log.e("Api", "getPlaylistSongs failed for $playlistId, trying show fallback", it)
+                Spotify.showEpisodes(playlistId.removePrefix("show:"), limit = 50).fold(
+                    onSuccess = { paging ->
+                        val songs = paging.items.map { ep -> ep.toSongModel() }
+                        emit(Response.Success(songs))
+                        OfflineCache.savePlaylistSongs(context, playlistId, songs)
+                    },
+                    onFailure = { _ ->
+                        if (offlineForPlaylist.isNotEmpty()) emit(Response.Success(offlineForPlaylist))
+                        else if (cachedForPlaylist != null) emit(Response.Success(cachedForPlaylist))
+                        else emit(Response.Error(it.message ?: "error"))
+                    }
+                )
             },
         )
     }
@@ -570,18 +733,44 @@ class Api @Inject constructor(
             isPlaylist = true,
         )
 
-        val downloadedPlaylists = com.music.spotui.data.preferences.getDownloadedPlaylists(context).map { pl ->
+        val localSavedAlbums = com.music.spotui.data.preferences.getSavedAlbums(context).map { a ->
             LibraryEntry(
-                spotifyId = pl.id,
-                name = pl.name,
-                subtitle = "Downloaded Playlist • ${pl.downloadedTrackCount} songs",
-                coverUri = pl.coverUri,
+                spotifyId = a.id.toString(),
+                name = a.name,
+                subtitle = "Album • " + a.artists,
+                coverUri = a.coverUri,
+                isPlaylist = false,
+                artists = a.artists,
+            )
+        }
+
+        val savedAlbumIds: Set<String> = (localSavedAlbums.map { it.spotifyId } + com.music.spotui.data.preferences.getSavedAlbums(context).map { it.id.toString() }).toSet()
+        val savedAlbumNames: Set<String> = (localSavedAlbums.map { it.name.lowercase().trim() } + com.music.spotui.data.preferences.getSavedAlbums(context).map { it.name.lowercase().trim() }).toSet()
+
+        val downloadedPlaylists = com.music.spotui.data.preferences.getDownloadedPlaylists(context)
+            .filter { pl -> pl.id !in savedAlbumIds && pl.name.lowercase().trim() !in savedAlbumNames }
+            .map { pl ->
+                LibraryEntry(
+                    spotifyId = pl.id,
+                    name = pl.name,
+                    subtitle = "Downloaded Playlist • ${pl.downloadedTrackCount} songs",
+                    coverUri = pl.coverUri,
+                    isPlaylist = true,
+                )
+            }
+
+        val localSavedPlaylists = com.music.spotui.data.preferences.getSavedPlaylists(context).map { p ->
+            LibraryEntry(
+                spotifyId = p.id,
+                name = p.name,
+                subtitle = p.subtitle,
+                coverUri = p.coverUri,
                 isPlaylist = true,
             )
         }
 
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            val baseList = (listOf(liked, downloaded) + downloadedPlaylists).distinctBy { it.spotifyId }
+            val baseList = (listOf(liked, downloaded) + downloadedPlaylists + localSavedPlaylists + localSavedAlbums).distinctBy { it.spotifyId }
             val existing = cached ?: emptyList()
             val merged = (baseList + existing).distinctBy { it.spotifyId }
             HomeCache.library = merged
@@ -609,7 +798,8 @@ class Api @Inject constructor(
             )
         }
 
-        val merged = (listOf(liked, downloaded) + downloadedPlaylists + playlists + albums).distinctBy { it.spotifyId }
+        val merged = (listOf(liked, downloaded) + downloadedPlaylists + localSavedPlaylists + localSavedAlbums + playlists + albums)
+            .distinctBy { if (it.isPlaylist) "p:${it.spotifyId}" else "a:${it.name.lowercase()}" }
         HomeCache.library = merged
         OfflineCache.saveLibrary(context, merged)
         emit(Response.Success(merged))
@@ -696,37 +886,96 @@ class Api @Inject constructor(
             )))
             return@flow
         }
-        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
+
+        if (playlistId == "your-episodes" || playlistId == "episodes" || playlistId.contains("your-episodes", ignoreCase = true)) {
+            val episodes = if (NetworkMonitor.isOnlineNow(context) && SpotifyTokenProvider.ensureToken(context)) {
+                Spotify.myEpisodes(limit = 1).getOrNull()?.items.orEmpty()
+            } else emptyList()
+            val cover = episodes.firstOrNull()?.episode?.images?.firstOrNull()?.url
+                ?: "https://misc.scdn.co/your-episodes/your-episodes-640.png"
             emit(Response.Success(AlbumsModel(
                 id = playlistId.hashCode() and 0x7fffffff,
-                artists = "Offline Playlist",
-                coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
-                name = "Playlist",
-                time = "${downloadedSongs.size} offline tracks",
+                artists = "Spotify Podcasts",
+                coverUri = cover,
+                name = "Your Episodes",
+                time = "Saved podcast episodes",
             )))
+            return@flow
+        }
+
+        // Check saved / custom playlists
+        val savedPl = com.music.spotui.data.preferences.getSavedPlaylists(context).firstOrNull { it.id == playlistId }
+        if (savedPl != null && savedPl.isCustom) {
+            val songs = com.music.spotui.data.preferences.getCustomPlaylistSongs(context, playlistId)
+            emit(Response.Success(AlbumsModel(
+                id = playlistId.hashCode() and 0x7fffffff,
+                artists = "Custom Playlist",
+                coverUri = savedPl.coverUri.ifBlank { songs.firstOrNull()?.coverUri ?: "" },
+                name = savedPl.name,
+                time = savedPl.description.ifBlank { "${songs.size} songs" },
+            )))
+            return@flow
+        }
+        val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
+        val cachedPl = OfflineCache.getPlaylist(context, playlistId)
+            ?: OfflineCache.getLibrary(context)?.firstOrNull { it.spotifyId == playlistId }?.let {
+                AlbumsModel(
+                    id = stableId("playlist:${it.spotifyId}"),
+                    artists = it.subtitle,
+                    coverUri = it.coverUri,
+                    name = it.name,
+                    time = it.subtitle,
+                )
+            }
+
+        if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
+            val model = cachedPl ?: AlbumsModel(
+                id = playlistId.hashCode() and 0x7fffffff,
+                artists = if (downloadedSongs.isNotEmpty()) "Downloaded Playlist" else "Offline Playlist",
+                coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
+                name = if (downloadedSongs.isNotEmpty()) "Downloaded Playlist" else "Playlist",
+                time = "${downloadedSongs.size} tracks available offline",
+            )
+            emit(Response.Success(model))
             return@flow
         }
         Spotify.playlist(playlistId).fold(
             onSuccess = { p ->
-                emit(Response.Success(AlbumsModel(
+                val model = AlbumsModel(
                     id = stableId("playlist:${p.id}"),
                     artists = p.owner?.displayName ?: "",
                     coverUri = p.images.firstOrNull()?.url ?: "",
                     name = p.name,
                     time = stripHtml(p.description),
-                )))
+                )
+                OfflineCache.savePlaylist(context, playlistId, model)
+                emit(Response.Success(model))
             },
             onFailure = {
-                Log.e("Api", "getPlaylist failed", it)
-                val downloadedSongs = com.music.spotui.data.preferences.getDownloadedSongsForPlaylist(context, playlistId)
-                emit(Response.Success(AlbumsModel(
-                    id = playlistId.hashCode() and 0x7fffffff,
-                    artists = "",
-                    coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
-                    name = "Playlist",
-                    time = "${downloadedSongs.size} offline tracks",
-                )))
+                Log.e("Api", "getPlaylist failed for $playlistId, trying show fallback", it)
+                Spotify.show(playlistId.removePrefix("show:")).fold(
+                    onSuccess = { s ->
+                        val model = AlbumsModel(
+                            id = stableId("show:${s.id}"),
+                            artists = s.publisher.orEmpty().ifBlank { "Podcast" },
+                            coverUri = s.images.firstOrNull()?.url ?: "",
+                            name = s.name,
+                            time = stripHtml(s.description.orEmpty()),
+                        )
+                        OfflineCache.savePlaylist(context, playlistId, model)
+                        emit(Response.Success(model))
+                    },
+                    onFailure = { _ ->
+                        val model = cachedPl ?: AlbumsModel(
+                            id = playlistId.hashCode() and 0x7fffffff,
+                            artists = if (downloadedSongs.isNotEmpty()) "Downloaded Playlist" else "",
+                            coverUri = downloadedSongs.firstOrNull()?.coverUri ?: "",
+                            name = "Playlist",
+                            time = "${downloadedSongs.size} offline tracks",
+                        )
+                        emit(Response.Success(model))
+                    }
+                )
             },
         )
     }

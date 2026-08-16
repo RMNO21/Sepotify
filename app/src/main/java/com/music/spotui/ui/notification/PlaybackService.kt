@@ -2,6 +2,12 @@ package com.music.spotui.ui.notification
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.os.Build
+import android.os.PowerManager
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
@@ -15,6 +21,14 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.music.spotui.MainActivity
+import android.os.Bundle
+import androidx.media3.session.CommandButton
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.music.spotui.R
+import com.music.spotui.data.preferences.addLikedSongId
+import com.music.spotui.data.preferences.isSongLiked
+import com.music.spotui.data.preferences.removeLikedSongId
 import com.music.spotui.data.api.Api
 import com.music.spotui.data.api.Response
 import com.music.spotui.data.entity.SongsModel
@@ -27,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -60,12 +75,57 @@ class PlaybackService : MediaLibraryService() {
     private var webPlayer: WebMediaPlayer? = null
     private var showingWeb = false
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var isNoisyReceiverRegistered = false
+
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY == intent.action) {
+                SongPlayer.pause()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         SongPlayer.ensureCreated(this)
         // Let the player advance the in-app queue itself during a crossfade.
         SongPlayer.bindState(currentSongState)
         val base = SongPlayer.exoPlayer ?: return
+
+        // Register noisy receiver for audio output disconnects (headphones / Bluetooth)
+        try {
+            val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(noisyReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(noisyReceiver, filter)
+            }
+            isNoisyReceiverRegistered = true
+        } catch (e: Exception) {
+            // Ignored if receiver registration fails
+        }
+
+        // Observe playing state to manage PARTIAL_WAKE_LOCK and update notification layout reactively
+        serviceScope.launch {
+            currentSongState.playingStateFlow.collect { playing ->
+                updateWakeLock(playing)
+                updateCustomNotificationButtons()
+            }
+        }
+
+        serviceScope.launch {
+            currentSongState.repeatFlow.collect { updateCustomNotificationButtons() }
+        }
+
+        serviceScope.launch {
+            currentSongState.shuffleFlow.collect { updateCustomNotificationButtons() }
+        }
+
+        serviceScope.launch {
+            currentSongState.likeStateFlow.collect { updateCustomNotificationButtons() }
+        }
 
         // Tapping the notification opens the app (back on the Now Playing screen).
         val activityIntent = Intent(this, MainActivity::class.java).apply {
@@ -82,6 +142,8 @@ class PlaybackService : MediaLibraryService() {
             .setSessionActivity(sessionActivity)
             .build()
 
+        updateCustomNotificationButtons()
+
         // When a crossfade promotes a new ExoPlayer instance, re-bind the session to it
         // (runs on the main thread; setPlayer is the supported way to swap a session's player).
         SongPlayer.onPlayerSwapped = { newPlayer ->
@@ -97,6 +159,30 @@ class PlaybackService : MediaLibraryService() {
                 // Reflect the web player's real play/pause state into the in-app UI
                 // so the on-screen icon matches after the notification's pause.
                 currentSongState.updatePlayingState(SpotifyWebPlayer.isPlaying)
+            }
+        }
+    }
+
+    private fun updateWakeLock(isPlaying: Boolean) {
+        if (isPlaying) {
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SpotUI:PlaybackWakeLock")
+            }
+            if (wakeLock?.isHeld == false) {
+                try {
+                    wakeLock?.acquire(3 * 60 * 60 * 1000L) // 3 hour safety limit
+                } catch (e: Exception) {
+                    // Ignore wake lock acquire error if permission missing
+                }
+            }
+        } else {
+            if (wakeLock?.isHeld == true) {
+                try {
+                    wakeLock?.release()
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
         }
     }
@@ -160,19 +246,107 @@ class PlaybackService : MediaLibraryService() {
         SongPlayer.playSong(song.url, applicationContext)
     }
 
+    private val likeCommand = SessionCommand("CUSTOM_ACTION_LIKE", Bundle.EMPTY)
+    private val shuffleCommand = SessionCommand("CUSTOM_ACTION_SHUFFLE", Bundle.EMPTY)
+    private val repeatCommand = SessionCommand("CUSTOM_ACTION_REPEAT", Bundle.EMPTY)
+
+    fun updateCustomNotificationButtons() {
+        val session = mediaSession ?: return
+        val songId = currentSongState.songIdFlow.value
+        val isLiked = if (songId != 0) isSongLiked(applicationContext, songId.toString()) else currentSongState.likeStateFlow.value
+        val isShuffle = currentSongState.shuffleFlow.value
+        val isRepeat = currentSongState.repeatFlow.value
+
+        val likeBtn = CommandButton.Builder()
+            .setDisplayName("Like")
+            .setIconResId(if (isLiked) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline)
+            .setSessionCommand(likeCommand)
+            .build()
+
+        val shuffleBtn = CommandButton.Builder()
+            .setDisplayName("Shuffle")
+            .setIconResId(R.drawable.ic_player_shuffle)
+            .setSessionCommand(shuffleCommand)
+            .build()
+
+        val repeatBtn = CommandButton.Builder()
+            .setDisplayName("Repeat")
+            .setIconResId(if (isRepeat) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
+            .setSessionCommand(repeatCommand)
+            .build()
+
+        session.setCustomLayout(listOf(likeBtn, shuffleBtn, repeatBtn))
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
 
     // ── Android Auto browse tree ──────────────────────────────────────────
 
-    private companion object {
+    companion object {
         const val ROOT = "root"
         const val NODE_LIKED = "liked"
         const val NODE_DOWNLOADS = "downloads"
         const val NODE_PLAYLISTS = "playlists"
         const val NODE_ALBUMS = "albums"
+
+        @Volatile
+        var instance: PlaybackService? = null
+
+        fun updateNotification(context: android.content.Context) {
+            instance?.updateCustomNotificationButtons()
+        }
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
+
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): MediaSession.ConnectionResult {
+            val connectionResult = super.onConnect(session, controller)
+            val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
+                .add(likeCommand)
+                .add(shuffleCommand)
+                .add(repeatCommand)
+                .build()
+            return MediaSession.ConnectionResult.accept(
+                availableSessionCommands,
+                connectionResult.availablePlayerCommands
+            )
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            when (customCommand.customAction) {
+                "CUSTOM_ACTION_LIKE" -> {
+                    val songId = currentSongState.songId.value
+                    if (songId != 0) {
+                        val currentlyLiked = isSongLiked(applicationContext, songId.toString())
+                        if (currentlyLiked) {
+                            removeLikedSongId(applicationContext, songId.toString())
+                            currentSongState.updateLikeState(false)
+                        } else {
+                            addLikedSongId(applicationContext, songId.toString())
+                            currentSongState.updateLikeState(true)
+                        }
+                    }
+                    updateCustomNotificationButtons()
+                }
+                "CUSTOM_ACTION_SHUFFLE" -> {
+                    currentSongState.updateShuffleState(!currentSongState.shuffle.value)
+                    updateCustomNotificationButtons()
+                }
+                "CUSTOM_ACTION_REPEAT" -> {
+                    currentSongState.updateRepeatState(!currentSongState.repeat.value)
+                    updateCustomNotificationButtons()
+                }
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
@@ -332,6 +506,23 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        if (instance == this) instance = null
+        if (isNoisyReceiverRegistered) {
+            try {
+                unregisterReceiver(noisyReceiver)
+            } catch (e: Exception) {
+                // Ignore
+            }
+            isNoisyReceiverRegistered = false
+        }
+        if (wakeLock?.isHeld == true) {
+            try {
+                wakeLock?.release()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+        wakeLock = null
         serviceScope.cancel()
         SongPlayer.onPlayerSwapped = null
         SpotifyWebPlayer.onStateChanged = null

@@ -46,9 +46,12 @@ class NewPipeDownloaderImpl(
                 .Builder()
                 .method(httpMethod, dataToSend?.toRequestBody())
                 .url(url)
-                .addHeader("User-Agent", YouTubeClient.USER_AGENT_WEB)
 
+        var hasUserAgent = false
         headers.forEach { (headerName, headerValueList) ->
+            if (headerName.equals("User-Agent", ignoreCase = true)) {
+                hasUserAgent = true
+            }
             if (headerValueList.size > 1) {
                 requestBuilder.removeHeader(headerName)
                 headerValueList.forEach { headerValue ->
@@ -57,6 +60,10 @@ class NewPipeDownloaderImpl(
             } else if (headerValueList.size == 1) {
                 requestBuilder.header(headerName, headerValueList[0])
             }
+        }
+
+        if (!hasUserAgent) {
+            requestBuilder.header("User-Agent", YouTubeClient.USER_AGENT_WEB)
         }
 
         val response = client.newCall(requestBuilder.build()).execute()
@@ -161,7 +168,8 @@ object NewPipeExtractor {
                 (it.itagItem?.id ?: return@mapNotNull null) to it.content
             }
         } catch (e: Exception) {
-            // Don't print stack trace - caller handles errors
+            println("[NEWPIPE ERROR] Exception during StreamInfo.getInfo: ${e.javaClass.name}: ${e.message}")
+            e.printStackTrace()
             emptyList()
         }
     }

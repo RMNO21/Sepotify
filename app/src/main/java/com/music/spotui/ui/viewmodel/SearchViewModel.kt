@@ -75,17 +75,34 @@ class SearchViewModel @Inject constructor(private val repository: AppRepository,
         currentSongState.updateSongState(coverUri, title, singer, playingState, songId, songIndex, album)
     }
 
-    fun search(query: String) {
+    fun search(query: String, context: android.content.Context? = com.music.spotui.MyApplication.instance) {
         searchJob?.cancel()
+        if (query.isBlank()) {
+            _results.value = Response.Success(SearchResults())
+            _songs.value = Response.Success(emptyList())
+            return
+        }
+        _results.value = Response.Loading()
+        _songs.value = Response.Loading()
         searchJob = viewModelScope.launch(Dispatchers.IO) {
-            delay(150) // short debounce for snappy real-time results
+            delay(300) // 300ms debounced search pipeline
             repository.searchEverything(query).collect { result ->
-                _results.value = result
-                // Keep the legacy songs flow in sync for any remaining consumers.
-                _songs.value = when (result) {
-                    is Response.Success -> Response.Success(result.data.songs)
-                    is Response.Error -> Response.Error(result.error)
-                    is Response.Loading -> Response.Loading()
+                if (result is Response.Error && context != null) {
+                    val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
+                    val q = query.lowercase()
+                    val filtered = downloaded.filter {
+                        it.title.lowercase().contains(q) || it.singer.lowercase().contains(q) || it.album.lowercase().contains(q)
+                    }
+                    val offlineResults = SearchResults(songs = filtered)
+                    _results.value = Response.Success(offlineResults)
+                    _songs.value = Response.Success(filtered)
+                } else {
+                    _results.value = result
+                    _songs.value = when (result) {
+                        is Response.Success -> Response.Success(result.data.songs)
+                        is Response.Error -> Response.Error(result.error)
+                        is Response.Loading -> Response.Loading()
+                    }
                 }
             }
         }

@@ -23,6 +23,10 @@ data class YouTubeClient(
     val isEmbedded: Boolean = false,
     val useWebPoTokens: Boolean = false,
 ) {
+    val apiUrl: String get() = if (clientName == "WEB_REMIX") API_URL_YOUTUBE_MUSIC else API_URL_YOUTUBE_MAIN
+    val origin: String get() = if (clientName == "WEB_REMIX") ORIGIN_YOUTUBE_MUSIC else ORIGIN_YOUTUBE_MAIN
+    val referer: String get() = if (clientName == "WEB_REMIX") REFERER_YOUTUBE_MUSIC else REFERER_YOUTUBE_MAIN
+
     fun toContext(locale: YouTubeLocale, visitorData: String?, dataSyncId: String?) = Context(
         client = Context.Client(
             clientName = clientName,
@@ -42,22 +46,26 @@ data class YouTubeClient(
     )
 
     companion object {
-        const val USER_AGENT_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
+        const val USER_AGENT_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
         const val ORIGIN_YOUTUBE_MUSIC = "https://music.youtube.com"
         const val REFERER_YOUTUBE_MUSIC = "$ORIGIN_YOUTUBE_MUSIC/"
         const val API_URL_YOUTUBE_MUSIC = "$ORIGIN_YOUTUBE_MUSIC/youtubei/v1/"
 
+        const val ORIGIN_YOUTUBE_MAIN = "https://www.youtube.com"
+        const val REFERER_YOUTUBE_MAIN = "$ORIGIN_YOUTUBE_MAIN/"
+        const val API_URL_YOUTUBE_MAIN = "$ORIGIN_YOUTUBE_MAIN/youtubei/v1/"
+
         val WEB = YouTubeClient(
             clientName = "WEB",
-            clientVersion = "2.20260213.00.00",
+            clientVersion = "2.20241118.01.00",
             clientId = "1",
             userAgent = USER_AGENT_WEB,
         )
 
         val WEB_REMIX = YouTubeClient(
             clientName = "WEB_REMIX",
-            clientVersion = "1.20260213.01.00",
+            clientVersion = "1.20241118.01.00",
             clientId = "67",
             userAgent = USER_AGENT_WEB,
             loginSupported = true,
@@ -67,7 +75,7 @@ data class YouTubeClient(
 
         val WEB_CREATOR = YouTubeClient(
             clientName = "WEB_CREATOR",
-            clientVersion = "1.20260213.00.00",
+            clientVersion = "1.20241118.00.00",
             clientId = "62",
             userAgent = USER_AGENT_WEB,
             loginSupported = true,
@@ -77,7 +85,7 @@ data class YouTubeClient(
 
         val TVHTML5 = YouTubeClient(
             clientName = "TVHTML5",
-            clientVersion = "7.20260213.00.00",
+            clientVersion = "7.20241118.00.00",
             clientId = "7",
             userAgent = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15",
             loginSupported = true,
@@ -103,17 +111,25 @@ data class YouTubeClient(
 
         val IOS = YouTubeClient(
             clientName = "IOS",
-            clientVersion = "21.03.1",
+            clientVersion = "19.49.1",
             clientId = "5",
-            userAgent = "com.google.ios.youtube/21.03.1 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
-            osVersion = "18.2.22C152",
+            userAgent = "com.google.ios.youtube/19.49.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)",
+            osName = "iOS",
+            osVersion = "17.5.1.21F90",
+            deviceMake = "Apple",
+            deviceModel = "iPhone16,2",
         )
 
         val MOBILE = YouTubeClient(
             clientName = "ANDROID",
-            clientVersion = "21.03.38",
+            clientVersion = "19.49.34",
             clientId = "3",
-            userAgent = "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+            userAgent = "com.google.android.youtube/19.49.34 (Linux; U; Android 14; en_US; Pixel 8) gzip",
+            osName = "Android",
+            osVersion = "14",
+            deviceMake = "Google",
+            deviceModel = "Pixel 8",
+            androidSdkVersion = "34",
             loginSupported = true,
             useSignatureTimestamp = true
         )
@@ -125,9 +141,9 @@ data class YouTubeClient(
          */
         val ANDROID_NO_SDK = YouTubeClient(
             clientName = "ANDROID",
-            clientVersion = "21.03.38",
+            clientVersion = "19.49.34",
             clientId = "3",
-            userAgent = "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+            userAgent = "com.google.android.youtube/19.49.34 (Linux; U; Android 14; en_US; Pixel 8) gzip",
             friendlyName = "Android No SDK",
             loginSupported = false,
             useSignatureTimestamp = false
@@ -135,9 +151,9 @@ data class YouTubeClient(
 
         val ANDROID_VR_NO_AUTH = YouTubeClient(
             clientName = "ANDROID_VR",
-            clientVersion = "1.61.48",
+            clientVersion = "1.54.19",
             clientId = "28",
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Oculus Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)",
+            userAgent = "com.google.android.apps.youtube.vr.oculus/1.54.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/120.0.6099.199)",
             loginSupported = false,
             useSignatureTimestamp = false
         )
@@ -148,18 +164,18 @@ data class YouTubeClient(
          */
         val ANDROID_VR_1_61_48 = YouTubeClient(
             clientName = "ANDROID_VR",
-            clientVersion = "1.61.48",
+            clientVersion = "1.54.19",
             clientId = "28",
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)",
+            userAgent = "com.google.android.apps.youtube.vr.oculus/1.54.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/120.0.6099.199)",
             osName = "Android",
             osVersion = "12",
             deviceMake = "Oculus",
             deviceModel = "Quest 3",
             androidSdkVersion = "32",
             buildId = "SQ3A.220605.009.A1",
-            cronetVersion = "132.0.6808.3",
+            cronetVersion = "120.0.6099.199",
             packageName = "com.google.android.apps.youtube.vr.oculus",
-            friendlyName = "Android VR 1.61",
+            friendlyName = "Android VR 1.54",
             loginSupported = false,
             useSignatureTimestamp = false
         )

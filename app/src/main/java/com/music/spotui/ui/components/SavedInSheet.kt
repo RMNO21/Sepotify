@@ -86,6 +86,8 @@ fun SavedInSheet(
     var creating by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
+    var customPlaylists by remember { mutableStateOf(com.music.spotui.data.preferences.getSavedPlaylists(context).filter { it.isCustom }) }
+
     LaunchedEffect(Unit) {
         playlists = withContext(Dispatchers.IO) {
             Spotify.myPlaylists().getOrNull()?.items?.filter { it.id.isNotBlank() } ?: emptyList()
@@ -96,7 +98,13 @@ fun SavedInSheet(
         val name = newName.trim().ifBlank { "My Playlist" }
         creating = false
         newName = ""
-        SpotifySync.createPlaylistWithTrack(context, name, song.spotifyTrackId)
+        val created = com.music.spotui.data.preferences.createCustomPlaylist(context, name)
+        com.music.spotui.data.preferences.addSongToCustomPlaylist(context, created.id, song)
+        com.music.spotui.data.api.Api.HomeCache.library = null
+        if (song.spotifyTrackId.isNotBlank()) {
+            SpotifySync.createPlaylistWithTrack(context, name, song.spotifyTrackId)
+        }
+        android.widget.Toast.makeText(context, "Added to $name", android.widget.Toast.LENGTH_SHORT).show()
         onDismiss()
     }
 
@@ -196,6 +204,51 @@ fun SavedInSheet(
                 else removeLikedSongId(context, song.id.toString())
                 SpotifySync.setTrackSaved(context, song.spotifyTrackId, liked)
                 onLikedChanged(liked)
+            }
+
+            if (customPlaylists.isNotEmpty()) {
+                customPlaylists.forEach { cpl ->
+                    var isCustomSaved by remember(cpl.id) {
+                        mutableStateOf(com.music.spotui.data.preferences.getCustomPlaylistSongs(context, cpl.id).any { it.id == song.id || (it.title == song.title && it.singer == song.singer) })
+                    }
+                    SavedInRow(
+                        name = cpl.name,
+                        subtitle = "Custom playlist",
+                        saved = isCustomSaved,
+                        cover = {
+                            if (cpl.coverUri.isNotBlank()) {
+                                GlideImage(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(RoundedCornerShape(4.dp)),
+                                    model = cpl.coverUri,
+                                    contentScale = ContentScale.Crop,
+                                    failure = placeholder(R.drawable.placeholder),
+                                    loading = placeholder(R.drawable.placeholder),
+                                    contentDescription = "",
+                                )
+                            } else {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFF2E2E3A)),
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        },
+                    ) {
+                        if (isCustomSaved) {
+                            com.music.spotui.data.preferences.removeSongFromCustomPlaylist(context, cpl.id, song.id.toString())
+                            isCustomSaved = false
+                        } else {
+                            com.music.spotui.data.preferences.addSongToCustomPlaylist(context, cpl.id, song)
+                            isCustomSaved = true
+                        }
+                    }
+                }
             }
 
             when (val list = playlists) {

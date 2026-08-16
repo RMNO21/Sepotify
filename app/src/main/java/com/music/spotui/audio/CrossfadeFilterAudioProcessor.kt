@@ -93,10 +93,15 @@ class CrossfadeFilterAudioProcessor : BaseAudioProcessor() {
         val output = replaceOutputBuffer(remaining)
         inputBuffer.order(ByteOrder.nativeOrder())
 
-        when (channelCount) {
-            1 -> processMonoBlock(inputBuffer, output)
-            2 -> processStereoBlock(inputBuffer, output)
-            else -> copyBuffer(inputBuffer, output, remaining)
+        try {
+            when (channelCount) {
+                1 -> processMonoBlock(inputBuffer, output)
+                2 -> processStereoBlock(inputBuffer, output)
+                else -> copyBuffer(inputBuffer, output, remaining)
+            }
+        } catch (e: Exception) {
+            output.clear()
+            copyBuffer(inputBuffer, output, inputBuffer.remaining())
         }
 
         output.flip()
@@ -109,10 +114,11 @@ class CrossfadeFilterAudioProcessor : BaseAudioProcessor() {
             return
         }
         val pos = src.position()
-        for (i in 0 until size) {
+        val toCopy = Math.min(size, src.remaining())
+        for (i in 0 until toCopy) {
             dst.put(src.get(pos + i))
         }
-        src.position(pos + size)
+        src.position(pos + toCopy)
     }
 
     private fun processMonoBlock(input: ByteBuffer, output: ByteBuffer) {
@@ -120,6 +126,9 @@ class CrossfadeFilterAudioProcessor : BaseAudioProcessor() {
             val sample = input.short.toDouble() / Short.MAX_VALUE
             val filtered = filter.processSampleMono(sample)
             output.putShort((filtered.coerceIn(-1.0, 1.0) * Short.MAX_VALUE).toInt().toShort())
+        }
+        while (input.hasRemaining()) {
+            output.put(input.get())
         }
     }
 
@@ -131,10 +140,14 @@ class CrossfadeFilterAudioProcessor : BaseAudioProcessor() {
             output.putShort((filteredL.coerceIn(-1.0, 1.0) * Short.MAX_VALUE).toInt().toShort())
             output.putShort((filteredR.coerceIn(-1.0, 1.0) * Short.MAX_VALUE).toInt().toShort())
         }
+        while (input.hasRemaining()) {
+            output.put(input.get())
+        }
     }
 
     override fun onFlush() {
         super.onFlush()
+        coefficientsDirty = true
         filter.reset()
     }
 

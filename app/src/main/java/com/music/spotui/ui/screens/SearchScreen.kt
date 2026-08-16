@@ -30,6 +30,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -82,7 +88,7 @@ fun SearchScreen(navController: NavController) {
     val searchViewModel : SearchViewModel = hiltViewModel()
     val results by searchViewModel.results.collectAsState()
 
-    // Results are live search hits (or empty); never gate the search UI on them.
+    val isLoading = results is Response.Loading
     val searchResults = (results as? Response.Success)?.data ?: SearchResults()
 
     Surface(
@@ -90,7 +96,69 @@ fun SearchScreen(navController: NavController) {
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
     ) {
-        SumUpSearchScreen(navController = navController, searchResults, searchViewModel)
+        SumUpSearchScreen(navController = navController, searchResults, searchViewModel, isLoading)
+    }
+}
+
+@Composable
+fun SearchShimmerLoading() {
+    val transition = rememberInfiniteTransition(label = "shimmerTransition")
+    val translateAnim by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerTranslation"
+    )
+
+    val shimmerColors = listOf(
+        Color(0xFF282828),
+        Color(0xFF383838),
+        Color(0xFF282828),
+    )
+
+    val brush = androidx.compose.ui.graphics.Brush.linearGradient(
+        colors = shimmerColors,
+        start = androidx.compose.ui.geometry.Offset(translateAnim - 200f, translateAnim - 200f),
+        end = androidx.compose.ui.geometry.Offset(translateAnim, translateAnim)
+    )
+
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        repeat(6) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(brush)
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.6f)
+                            .height(16.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(brush)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.35f)
+                            .height(12.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(brush)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -102,6 +170,7 @@ fun SumUpSearchScreen(
     navController: NavController,
     results: SearchResults,
     searchViewModel: SearchViewModel,
+    isLoading: Boolean = false,
 ) {
     val context = LocalContext.current
 
@@ -133,7 +202,7 @@ fun SumUpSearchScreen(
     }
 
     LazyColumn(
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 130.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 160.dp),
         modifier = Modifier
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
@@ -237,6 +306,8 @@ fun SumUpSearchScreen(
                     }
                 }
             }
+        } else if (isLoading) {
+            item { SearchShimmerLoading() }
         } else {
             items(mixed.size) { i ->
                 when (val row = mixed[i]) {

@@ -14,6 +14,61 @@ object OfflineCache {
     private const val KEY_HOME = "cached_home"
     private const val KEY_LIBRARY = "cached_library"
     private const val KEY_PLAYLIST_PREFIX = "cached_pl_"
+    private const val KEY_PLAYLIST_META_PREFIX = "cached_pl_meta_"
+    private const val PREFS_BROWSE_TILES = "sepotify_browse_tiles"
+
+    fun savePlaylist(context: Context, playlistId: String, playlist: com.music.spotui.data.entity.AlbumsModel) {
+        if (playlistId.isBlank()) return
+        runCatching {
+            val json = JSONObject().apply {
+                put("id", playlist.id)
+                put("name", playlist.name)
+                put("artists", playlist.artists)
+                put("coverUri", playlist.coverUri)
+                put("time", playlist.time)
+                put("type", playlist.type)
+            }.toString()
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString("$KEY_PLAYLIST_META_PREFIX$playlistId", json)
+                .apply()
+        }
+    }
+
+    fun getPlaylist(context: Context, playlistId: String): com.music.spotui.data.entity.AlbumsModel? = runCatching {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("$KEY_PLAYLIST_META_PREFIX$playlistId", null) ?: return null
+        val obj = JSONObject(raw)
+        com.music.spotui.data.entity.AlbumsModel(
+            id = obj.optInt("id", playlistId.hashCode() and 0x7fffffff),
+            name = obj.optString("name", "Playlist"),
+            artists = obj.optString("artists", ""),
+            coverUri = obj.optString("coverUri", ""),
+            time = obj.optString("time", ""),
+            type = obj.optString("type", ""),
+        )
+    }.getOrNull()
+
+    fun saveBrowseTile(context: Context, genre: String, url: String) {
+        if (genre.isBlank() || url.isBlank()) return
+        runCatching {
+            context.getSharedPreferences(PREFS_BROWSE_TILES, Context.MODE_PRIVATE)
+                .edit()
+                .putString(genre.lowercase().trim(), url)
+                .apply()
+        }
+    }
+
+    fun getBrowseTile(context: Context, genre: String): String? = runCatching {
+        context.getSharedPreferences(PREFS_BROWSE_TILES, Context.MODE_PRIVATE)
+            .getString(genre.lowercase().trim(), null)
+    }.getOrNull()
+
+    fun getAllBrowseTiles(context: Context): Map<String, String> = runCatching {
+        context.getSharedPreferences(PREFS_BROWSE_TILES, Context.MODE_PRIVATE)
+            .all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }
+            .toMap()
+    }.getOrDefault(emptyMap())
 
     fun saveHome(context: Context, feed: HomeFeedModel) {
         runCatching {

@@ -44,7 +44,7 @@ object NetworkMonitor {
                 request,
                 object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
-                        _isOnline.value = true
+                        _isOnline.value = isOnlineNow(appContext)
                     }
 
                     override fun onLost(network: Network) {
@@ -55,8 +55,7 @@ object NetworkMonitor {
                         network: Network,
                         networkCapabilities: NetworkCapabilities
                     ) {
-                        val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                        _isOnline.value = hasInternet
+                        _isOnline.value = isOnlineNow(appContext)
                     }
                 }
             )

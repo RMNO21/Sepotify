@@ -26,10 +26,26 @@ class LibraryViewModel @Inject constructor(private val repository: AppRepository
         MutableStateFlow(emptyList())
     val followedArtists: StateFlow<List<com.music.spotui.data.entity.ArtistsModel>> = _followedArtists
 
+    private val _isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing
+
     init {
         load()
         loadAccount()
         loadFollowedArtists()
+    }
+
+    fun refresh() = viewModelScope.launch(Dispatchers.IO) {
+        _isRefreshing.value = true
+        com.music.spotui.data.api.Api.HomeCache.library = null
+        loadFollowedArtists()
+        loadAccount()
+        repository.provideLibrary().collect { resp ->
+            _entries.value = resp
+            if (resp !is Response.Loading) {
+                _isRefreshing.value = false
+            }
+        }
     }
 
     fun load() = viewModelScope.launch(Dispatchers.IO) {

@@ -2,6 +2,7 @@ package com.music.spotui.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,13 +37,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
@@ -147,26 +152,34 @@ fun MiniPlayer(navController: NavHostController) {
     }
 
 
+    val haptic = LocalHapticFeedback.current
+
     Column(
         modifier = Modifier
-
             .padding(13.dp, 0.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(darkVibrantColor)
             .padding(8.dp, 0.dp)
             .clipToBounds()
-
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { _, dragAmount ->
+                    if (dragAmount < -10f) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        navController.navigate(Routes.Player.route)
+                    }
+                }
+            }
     ) {
         Row(horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                //.background(Color.Green)
                 .padding(0.dp, 4.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     navController.navigate(Routes.Player.route)
                 }
         ){
@@ -215,7 +228,10 @@ fun MiniPlayer(navController: NavHostController) {
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { showSavedIn = true },
+                            ) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showSavedIn = true
+                            },
                         contentDescription = "Saved",
                     )
                 } else {
@@ -226,6 +242,7 @@ fun MiniPlayer(navController: NavHostController) {
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 addLikedSongId(context, songId.toString())
                                 isLiked = true
                                 miniPlayerViewModel.updateLikeState(!likeState)
@@ -255,6 +272,7 @@ fun MiniPlayer(navController: NavHostController) {
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (songPlayingState) {
                                 SongPlayer.pause()
                                 miniPlayerViewModel.updateSongState(

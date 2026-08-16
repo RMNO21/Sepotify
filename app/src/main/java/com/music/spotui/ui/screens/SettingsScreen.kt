@@ -460,7 +460,7 @@ fun SettingsScreen(navController: NavController) {
                         .padding(vertical = 12.dp),
                 )
             }
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(160.dp))
         }
 
         if (showSpotifyCookieDialog) {

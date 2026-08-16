@@ -27,7 +27,7 @@ import java.net.Proxy
  * resolve the audio stream) and the NewPipe fallback deobfuscation.
  */
 object YouTube {
-    private val innerTube = InnerTube()
+    val innerTube = InnerTube()
 
     var locale: YouTubeLocale
         get() = innerTube.locale
@@ -95,6 +95,10 @@ object YouTube {
     suspend fun player(videoId: String, playlistId: String? = null, client: YouTubeClient, signatureTimestamp: Int? = null, poToken: String? = null): Result<PlayerResponse> = runCatching {
         innerTube.player(client, videoId, playlistId, signatureTimestamp, poToken).body<PlayerResponse>()
     }
+
+    suspend fun playerRawJson(videoId: String, client: YouTubeClient): String = runCatching {
+        innerTube.player(client, videoId, null, null, null).bodyAsText()
+    }.getOrDefault("")
 
     suspend fun visitorData(): Result<String> = runCatching {
         Json.parseToJsonElement(innerTube.getSwJsData().bodyAsText().substring(5))

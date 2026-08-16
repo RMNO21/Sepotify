@@ -26,9 +26,9 @@ class LyricsViewModel @Inject constructor() : ViewModel() {
 
     private var loadedKey: String? = null
 
-    fun load(title: String, artist: String, album: String, durationSec: Int) {
+    fun load(title: String, artist: String, album: String, durationSec: Int, forceReload: Boolean = false) {
         val key = "$title|$artist"
-        if (loadedKey == key && _state.value !is State.NotFound) return
+        if (!forceReload && loadedKey == key && _state.value !is State.NotFound) return
         loadedKey = key
         _state.value = State.Loading
         viewModelScope.launch(Dispatchers.IO) {

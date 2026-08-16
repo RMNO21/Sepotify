@@ -26,6 +26,9 @@ object SpotifySync {
     fun setAlbumSaved(context: Context, albumId: String, saved: Boolean) =
         setSaved(context, albumId, "spotify:album:$albumId", saved)
 
+    fun setPlaylistSaved(context: Context, playlistId: String, saved: Boolean) =
+        setSaved(context, playlistId, "spotify:playlist:$playlistId", saved)
+
     fun setArtistFollowed(context: Context, artistId: String, followed: Boolean) =
         setSaved(context, artistId, "spotify:artist:$artistId", followed)
 

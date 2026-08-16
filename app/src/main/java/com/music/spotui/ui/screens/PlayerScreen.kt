@@ -48,6 +48,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.launch
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderColors
@@ -172,16 +187,81 @@ fun PlayerScreen(navController: NavController) {
 
 
 
-    var dominentColor by remember {
-        mutableStateOf(Color(AppBackground.toArgb()))
+    var meshPalette by remember {
+        mutableStateOf(
+            com.music.spotui.di.MeshGradientPalette(
+                darkVibrant = Color(0xFF281838),
+                dominantDark = Color(0xFF181224),
+                darkMuted = Color(0xFF0D0A14)
+            )
+        )
     }
-    Palette().extractSecondColorFromCoverUrl(context = context, songCoverUri){ color ->
-        dominentColor = color
+
+    LaunchedEffect(songCoverUri) {
+        if (songCoverUri.isNotBlank()) {
+            Palette().extractMeshGradientColors(context, songCoverUri) { palette ->
+                meshPalette = palette
+            }
+        }
+    }
+
+    val animDarkVibrant by androidx.compose.animation.animateColorAsState(
+        targetValue = meshPalette.darkVibrant,
+        animationSpec = androidx.compose.animation.core.tween(600),
+        label = "meshVibrant"
+    )
+    val animDominantDark by androidx.compose.animation.animateColorAsState(
+        targetValue = meshPalette.dominantDark,
+        animationSpec = androidx.compose.animation.core.tween(600),
+        label = "meshDominant"
+    )
+    val animDarkMuted by androidx.compose.animation.animateColorAsState(
+        targetValue = meshPalette.darkMuted,
+        animationSpec = androidx.compose.animation.core.tween(600),
+        label = "meshMuted"
+    )
+
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    val sheetOffsetY = remember { androidx.compose.animation.core.Animatable(800f) }
+    var isInitialized by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (!isInitialized) {
+            sheetOffsetY.animateTo(
+                targetValue = 0f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                )
+            )
+            isInitialized = true
+        }
+    }
+
+    val dragProgress = (sheetOffsetY.value / 800f).coerceIn(0f, 1f)
+    val contentAlpha = (1f - dragProgress).coerceIn(0f, 1f)
+    val contentScale = (1f - dragProgress * 0.12f).coerceIn(0.88f, 1f)
+
+    fun dismissSheet() {
+        coroutineScope.launch {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            sheetOffsetY.animateTo(
+                targetValue = 1000f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
+                )
+            )
+            navController.popBackStack()
+        }
     }
 
     val songsResponse by playerViewModel.songs.collectAsState()
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
     val shuffle = playerViewModel.shuffleState.value
     val repeat = playerViewModel.repeatState.value
+
 
     val songs = if (songsResponse is Response.Success){
         (songsResponse as Response.Success).data
@@ -288,13 +368,66 @@ fun PlayerScreen(navController: NavController) {
 
 
     val canvasUrl = playerViewModel.canvasUrl.value
+    var isCanvasReady by remember(canvasUrl) { mutableStateOf(false) }
+    val canvasAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (canvasUrl != null && isCanvasReady) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(350),
+        label = "canvasAlpha"
+    )
+    val artworkAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (canvasUrl != null && isCanvasReady) 0f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(350),
+        label = "artworkAlpha"
+    )
+    val velocityTracker = remember { androidx.compose.ui.input.pointer.util.VelocityTracker() }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .offset { IntOffset(0, sheetOffsetY.value.toInt().coerceAtLeast(0)) }
+            .graphicsLayer {
+                alpha = contentAlpha
+                scaleX = contentScale
+                scaleY = contentScale
+            }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        val velocity = velocityTracker.calculateVelocity().y
+                        velocityTracker.resetTracking()
+                        coroutineScope.launch {
+                            if (sheetOffsetY.value > 250f || velocity > 800f) {
+                                dismissSheet()
+                            } else {
+                                sheetOffsetY.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        coroutineScope.launch {
+                            sheetOffsetY.animateTo(0f)
+                        }
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        velocityTracker.addPosition(change.uptimeMillis, change.position)
+                        val newOffset = (sheetOffsetY.value + dragAmount).coerceAtLeast(0f)
+                        coroutineScope.launch {
+                            sheetOffsetY.snapTo(newOffset)
+                        }
+                    }
+                )
+            }
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(dominentColor, Color.Black),
-                    startY = 100f
+                    colors = listOf(animDarkVibrant, animDominantDark, animDarkMuted, Color.Black),
+                    startY = 0f
                 )
             )
     ) {
@@ -304,11 +437,15 @@ fun PlayerScreen(navController: NavController) {
             // scrim on top so the title, slider and buttons stay readable.
             CanvasVideo(
                 url = canvasUrl,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(canvasAlpha),
+                onFirstFrameRendered = { isCanvasReady = true }
             )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .alpha(canvasAlpha)
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -365,7 +502,7 @@ fun PlayerScreen(navController: NavController) {
                             .aspectRatio(1f)
                             .padding(20.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .alpha(if (canvasUrl != null) 0f else 1f),
+                            .alpha(artworkAlpha),
                         model = songCoverUri,
                         contentScale = ContentScale.Crop,
                         contentDescription = "")
@@ -381,7 +518,7 @@ fun PlayerScreen(navController: NavController) {
                                 .fillMaxSize()
                                 .padding(20.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .alpha(if (canvasUrl != null) 0f else 1f),
+                                .alpha(artworkAlpha),
                             model = queueSongs.getOrNull(page)?.coverUri ?: songCoverUri,
                             contentScale = ContentScale.Crop,
                             contentDescription = "")
@@ -501,7 +638,7 @@ fun PlayerScreen(navController: NavController) {
                 title = songTitle,
                 artist = songSinger,
                 album = playerViewModel.currentSongAlbum.value,
-                accentColor = dominentColor,
+                accentColor = animDarkVibrant,
                 onExpand = { showLyrics = true },
             )
         }
@@ -512,7 +649,7 @@ fun PlayerScreen(navController: NavController) {
                 title = songTitle,
                 artist = songSinger,
                 album = playerViewModel.currentSongAlbum.value,
-                accentColor = dominentColor,
+                accentColor = animDarkVibrant,
                 onClose = { showLyrics = false }
             )
         }
@@ -533,6 +670,7 @@ fun PlayerTopBar(
     onMenuClick: () -> Unit,
     contextName: String = "",
 ) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier
             .fillMaxWidth()
@@ -543,13 +681,13 @@ fun PlayerTopBar(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
-                       navController.navigateUp()
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                navController.navigateUp()
             },
             painter = painterResource(id = R.drawable.ic_down),
             tint = Color.White,
             contentDescription = "")
 
-        // Spotify shows the source context here (album/playlist), not a generic label.
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = "PLAYING FROM",
@@ -576,7 +714,10 @@ fun PlayerTopBar(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) { onMenuClick() },
+                    ) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onMenuClick()
+                    },
                 contentDescription = "")
         }
     }
@@ -656,41 +797,142 @@ fun PlayerInfo(
                         indication = null,
                     ) { onArtistClick() } else Modifier,
                 )
-                if (source.isNotBlank()) {
-                    // Source badge: green = real Spotify; other colors = not Spotify
-                    // (Lossless via SpotiFLAC's Tidal/Qobuz/Amazon mirrors, or YouTube).
-                    val badgeColor = when {
-                        source == "Spotify" -> Color(0xFF1ED760)
-                        source.startsWith("Lossless") -> Color(0xFFFFC862)
-                        source == "Downloaded" -> Color(0xFF9C9C9C)
-                        else -> Color(0xFFFF6B6B)
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 3.dp),
-                    ) {
-                        Box(
+                val playbackStatus by com.music.spotui.di.SongPlayer.playbackStatus.collectAsState()
+                val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
+                when (val st = playbackStatus) {
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.Error -> {
+                        val badgeColor = Color(0xFFFF5252)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(badgeColor)
-                        )
-                        Text(
-                            // Don't advertise the fallback engine — just "Streamed".
-                            // Append the stream quality (codec/bitrate or FLAC depth)
-                            // so the user can see what they're actually hearing.
-                            text = (if (source == "YouTube") "Streamed" else source) +
-                                (if (quality.isNotBlank()) " • $quality" else ""),
-                            color = badgeColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            modifier = Modifier.padding(start = 5.dp),
-                        )
+                                .padding(top = 3.dp)
+                                .then(if (st.canRetry) Modifier.clickable { com.music.spotui.di.SongPlayer.retryLastPlay(context) } else Modifier),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = "${st.message}${if (st.canRetry) " • Tap to retry" else ""}",
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.Loading -> {
+                        val badgeColor = Color(0xFFFFC862)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 3.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = st.message,
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.Reconnecting -> {
+                        val badgeColor = Color(0xFFFF9800)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 3.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = "${st.message} (${st.attempt}/3)",
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.Buffering -> {
+                        val badgeColor = Color(0xFFFFC862)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 3.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = if (source.isNotBlank()) "Buffering • " + (if (source == "YouTube") "Streamed" else source) else "Buffering stream…",
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
+                    else -> {
+                        if (source.isNotBlank()) {
+                            // Source badge: green = real Spotify / downloaded; red = offline & unavailable; other colors = fallback stream.
+                            val badgeColor = when {
+                                !isOnline && source != "Downloaded" -> Color(0xFFF44336)
+                                source == "Spotify" -> Color(0xFF1ED760)
+                                source.startsWith("Lossless") -> Color(0xFFFFC862)
+                                source == "Deezer" -> Color(0xFF64B5F6)
+                                source == "Downloaded" -> Color(0xFF1ED760)
+                                else -> Color(0xFF64B5F6)
+                            }
+                            val badgeText = when {
+                                !isOnline && source != "Downloaded" -> "Offline • Stream Unavailable"
+                                source == "YouTube" -> "Streamed"
+                                else -> source
+                            } + (if (quality.isNotBlank() && (isOnline || source == "Downloaded")) " • $quality" else "")
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 3.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(badgeColor)
+                                )
+                                Text(
+                                    text = badgeText,
+                                    color = badgeColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(start = 5.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
         Icon(
             modifier = Modifier
@@ -699,10 +941,8 @@ fun PlayerInfo(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     if (isLiked.value && onShowSavedIn != null) {
-                        // Already saved — second tap opens the Spotify-style
-                        // "Saved in" sheet (Liked Songs + playlists) instead of
-                        // silently unliking.
                         onShowSavedIn()
                         return@clickable
                     }
@@ -715,7 +955,6 @@ fun PlayerInfo(
                     }
                     snackbarVisible = true
                     isLiked.value = isSongLiked(context, songId.toString())
-                    // Mirror the like to the real Spotify account.
                     com.music.spotui.data.api.SpotifySync.setTrackSaved(context, spotifyTrackId, isLiked.value)
                 },
             painter = if (isLiked.value){
@@ -751,16 +990,23 @@ fun CustomSlider(
     steps: Int = 0,
     colors: SliderColors = SliderDefaults.colors(),
 ) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Box(modifier = modifier.height(10.dp)) {
         Slider(
             value = value,
-            onValueChange = onValueChange,
-            onValueChangeFinished = onValueChangeFinished,
+            onValueChange = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                onValueChange(it)
+            },
+            onValueChangeFinished = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                onValueChangeFinished?.invoke()
+            },
             valueRange = valueRange,
             steps = steps,
             colors = colors,
             thumb = {
-                SliderDefaults.Thumb( //androidx.compose.material3.SliderDefaults
+                SliderDefaults.Thumb(
                     interactionSource = remember { MutableInteractionSource() },
                     modifier = Modifier.align(Alignment.Center),
                     colors = colors,
@@ -803,9 +1049,7 @@ fun PlayerFull(
     repeat: Boolean,
     queueSongs: List<SongsModel>
 ) {
-
-
-
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -820,12 +1064,12 @@ fun PlayerFull(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     if (shuffle) {
                         playerViewModel.updateShuffleState(false)
                     } else {
                         playerViewModel.updateShuffleState(true)
                     }
-
                 }
             ,
             tint = if (shuffle){
@@ -843,8 +1087,7 @@ fun PlayerFull(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-                    // The queue itself is already in shuffled order when shuffle
-                    // is on (reordered once at toggle) — never re-shuffle per tap.
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     playerViewModel.playPreviousSong(queueSongs, context)
                     isLiked.value =
                         isSongLiked(context, playerViewModel.currentSongId.value.toString())
@@ -855,12 +1098,11 @@ fun PlayerFull(
             contentDescription = "")
         androidx.compose.foundation.layout.Box(
             modifier = Modifier
-                // requiredSize forces an exact 64×64 square even if the parent Column
-                // constrains height — .size() alone let it get squished into an ellipse.
                 .requiredSize(64.dp)
                 .clip(CircleShape)
                 .background(Color.White)
                 .clickable {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     if (songPlayingState) {
                         SongPlayer.pause()
                         playerViewModel.updateSongState(
@@ -891,7 +1133,6 @@ fun PlayerFull(
             Icon(
                 modifier = Modifier
                     .size(30.dp)
-
                 ,
                 tint = Color.Black,
                 painter = if (songPlayingState)
@@ -909,7 +1150,7 @@ fun PlayerFull(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     playerViewModel.playNextSongs(queueSongs, context)
                     isLiked.value =
                         isSongLiked(context, playerViewModel.currentSongId.value.toString())
@@ -925,13 +1166,12 @@ fun PlayerFull(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     if (repeat) {
                         playerViewModel.updateRepeatState(false)
                     } else {
                         playerViewModel.updateRepeatState(true)
                     }
-
-
                 }
             ,
             tint = if (repeat){
@@ -1416,7 +1656,11 @@ fun PlayerMenuRow(
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun CanvasVideo(url: String, modifier: Modifier = Modifier) {
+private fun CanvasVideo(
+    url: String,
+    modifier: Modifier = Modifier,
+    onFirstFrameRendered: () -> Unit = {}
+) {
     val context = LocalContext.current
     val exo = remember(url) {
         androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
@@ -1427,13 +1671,26 @@ private fun CanvasVideo(url: String, modifier: Modifier = Modifier) {
             prepare()
         }
     }
-    androidx.compose.runtime.DisposableEffect(url) {
-        onDispose { exo.release() }
+    androidx.compose.runtime.DisposableEffect(exo) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onRenderedFirstFrame() {
+                onFirstFrameRendered()
+            }
+        }
+        exo.addListener(listener)
+        onDispose {
+            exo.removeListener(listener)
+            exo.release()
+        }
     }
     androidx.compose.ui.viewinterop.AndroidView(
         modifier = modifier,
         factory = { ctx ->
             androidx.media3.ui.PlayerView(ctx).apply {
+                layoutParams = android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
                 player = exo
                 // Strip ALL chrome: no controller, no buffering spinner, and no
                 // artwork/placeholder icon (that "play icon" overlay) — just video.
@@ -1448,5 +1705,8 @@ private fun CanvasVideo(url: String, modifier: Modifier = Modifier) {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
         },
+        update = { view ->
+            view.player = exo
+        }
     )
 }

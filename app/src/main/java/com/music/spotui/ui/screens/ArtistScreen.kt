@@ -140,7 +140,7 @@ private fun ArtistOverviewContent(
     }
 
     LazyColumn(
-        contentPadding = PaddingValues(bottom = 130.dp),
+        contentPadding = PaddingValues(bottom = 160.dp),
         modifier = Modifier
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
@@ -281,6 +281,11 @@ private fun ArtistOverviewContent(
                             ) { if (tracks.isNotEmpty()) playTrackAt(tracks.indices.random()) },
                     )
                     Spacer(Modifier.width(20.dp))
+                    val currentSongState = com.music.spotui.di.CurrentSongState.instance
+                    val currentSongId = currentSongState?.songId?.value ?: 0
+                    val isPlayingState = currentSongState?.playingState?.value ?: false
+                    val isCurrentSongInArtist = tracks.any { it.song.id == currentSongId }
+                    val isCurrentPlaying = isPlayingState && isCurrentSongInArtist
                     Box(modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
@@ -288,12 +293,18 @@ private fun ArtistOverviewContent(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                        ) { playTrackAt(0) },
+                        ) {
+                            when {
+                                isCurrentPlaying -> currentSongState?.updatePlayingState(false)
+                                isCurrentSongInArtist -> currentSongState?.updatePlayingState(true)
+                                else -> playTrackAt(0)
+                            }
+                        },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            painter = painterResource(id = R.drawable.play_svgrepo_com),
-                            contentDescription = "",
+                            painter = painterResource(id = if (isCurrentPlaying) R.drawable.ic_playing else R.drawable.play_svgrepo_com),
+                            contentDescription = if (isCurrentPlaying) "Pause" else "Play",
                             tint = Color.Black,
                             modifier = Modifier.size(26.dp),
                         )
@@ -610,7 +621,7 @@ fun ArtistReleasesScreen(navController: NavController, artistName: String) {
         }
 
         LazyColumn(
-            contentPadding = PaddingValues(bottom = 130.dp),
+            contentPadding = PaddingValues(bottom = 160.dp),
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(AppBackground.toArgb()))

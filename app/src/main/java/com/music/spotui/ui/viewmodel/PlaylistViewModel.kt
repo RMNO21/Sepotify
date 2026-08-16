@@ -52,7 +52,33 @@ class PlaylistViewModel @Inject constructor(
         currentSongState.updateLikeState(likeState)
     }
 
+    private val _isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing
+
     private var playlistKey: String? = null
+
+    fun refreshPlaylist(playlistId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isRefreshing.value = true
+            playlistKey = null
+            repository.providePlaylist(playlistId).collect { _playlist.value = it }
+            repository.providePlaylistSongs(playlistId).collect { resp ->
+                _songs.value = resp
+                if (resp is Response.Success) {
+                    val plName = (_playlist.value as? Response.Success)?.data?.name.orEmpty()
+                    com.music.spotui.data.preferences.checkAndAutoDownloadPlaylistNewTracks(
+                        com.music.spotui.MyApplication.instance,
+                        playlistId,
+                        plName,
+                        resp.data
+                    )
+                }
+                if (resp !is Response.Loading) {
+                    _isRefreshing.value = false
+                }
+            }
+        }
+    }
 
     fun loadPlaylist(playlistId: String) {
         if (playlistKey == playlistId) return
@@ -61,7 +87,18 @@ class PlaylistViewModel @Inject constructor(
             repository.providePlaylist(playlistId).collect { _playlist.value = it }
         }
         viewModelScope.launch(Dispatchers.IO) {
-            repository.providePlaylistSongs(playlistId).collect { _songs.value = it }
+            repository.providePlaylistSongs(playlistId).collect { resp ->
+                _songs.value = resp
+                if (resp is Response.Success) {
+                    val plName = (_playlist.value as? Response.Success)?.data?.name.orEmpty()
+                    com.music.spotui.data.preferences.checkAndAutoDownloadPlaylistNewTracks(
+                        com.music.spotui.MyApplication.instance,
+                        playlistId,
+                        plName,
+                        resp.data
+                    )
+                }
+            }
         }
     }
 }

@@ -60,18 +60,38 @@ object DeezerSource {
         spotifyId: String?,
         isrc: String? = null,
         searchQuery: String? = null,
+        expectedTitle: String? = null,
+        expectedArtist: String? = null,
+        expectedDurationSec: Int? = null,
     ): Resolved? = withContext(Dispatchers.IO) {
         val arl = getDeezerArl(context) ?: return@withContext null
         DeezerSession.setArl(arl)
         DeezerSession.authorize()
         if (!DeezerSession.hasArl()) return@withContext null
 
-        // ISRC → Deezer track id, falling back to a text search.
+        // 1. ISRC → Deezer track id (100% exact match)
         val effectiveIsrc = isrc?.takeIf { it.isNotBlank() }
             ?: spotifyId?.let { runCatching { Spotify.track(it).getOrNull()?.isrc }.getOrNull() }
-        val deezerId = effectiveIsrc?.let { DeezerSession.deezerIdForIsrc(it) }
-            ?: searchQuery?.takeIf { it.isNotBlank() }?.let { DeezerSession.searchTrackId(it) }
-            ?: return@withContext null
+        var deezerId = effectiveIsrc?.let { DeezerSession.deezerIdForIsrc(it) }
+
+        // 2. High-precision text search if ISRC was missing or not in Deezer catalog
+        if (deezerId == null) {
+            val q = when {
+                !expectedTitle.isNullOrBlank() && !expectedArtist.isNullOrBlank() -> "$expectedTitle $expectedArtist"
+                !searchQuery.isNullOrBlank() -> searchQuery
+                else -> null
+            }
+            if (q != null) {
+                deezerId = DeezerSession.searchTrackId(
+                    query = q,
+                    expectedTitle = expectedTitle,
+                    expectedArtist = expectedArtist,
+                    expectedDurationSec = expectedDurationSec,
+                )
+            }
+        }
+
+        if (deezerId == null) return@withContext null
 
         val tokens = DeezerSession.trackTokens(deezerId) ?: return@withContext null
 
@@ -79,14 +99,14 @@ object DeezerSource {
         val candidates = when (DeezerSession.entitledQuality) {
             DeezerSession.QUALITY_FLAC -> listOf(9, 3, 1)
             DeezerSession.QUALITY_MP3_320 -> listOf(3, 1)
-            else -> listOf(1)
+            else -> listOf(1, 3)
         }
         for (q in candidates) {
             val (url, encrypted) = DeezerSession.getTrackUrl(tokens, q)
             if (url != null) {
                 // Persist tier for the settings screen (best-effort).
                 runCatching { setDeezerTier(context, tierLabel(DeezerSession.entitledQuality)) }
-                Log.d(TAG, "Deezer resolved id=${tokens.id} q=$q for isrc=$effectiveIsrc")
+                Log.d(TAG, "Deezer resolved id=${tokens.id} q=$q for track='$expectedTitle'")
                 return@withContext Resolved(
                     url = url,
                     encrypted = encrypted,
@@ -105,9 +125,20 @@ object DeezerSource {
         spotifyId: String?,
         isrc: String? = null,
         searchQuery: String? = null,
+        expectedTitle: String? = null,
+        expectedArtist: String? = null,
+        expectedDurationSec: Int? = null,
     ): Result {
         if (getDeezerArl(context) == null) return Result.NotLoggedIn
-        val raw = resolveRaw(context, spotifyId, isrc, searchQuery) ?: return Result.NotFound
+        val raw = resolveRaw(
+            context = context,
+            spotifyId = spotifyId,
+            isrc = isrc,
+            searchQuery = searchQuery,
+            expectedTitle = expectedTitle,
+            expectedArtist = expectedArtist,
+            expectedDurationSec = expectedDurationSec,
+        ) ?: return Result.NotFound
         val uri = "deezer://stream" +
             "?u=${URLEncoder.encode(raw.url, "UTF-8")}" +
             "&id=${raw.trackId}" +

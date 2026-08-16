@@ -76,24 +76,112 @@ internal object DeezerSession {
     /** Resolve a Deezer track id from an ISRC via the public API. */
     fun deezerIdForIsrc(isrc: String): String? = runCatching {
         val json = callPublicApi("track/isrc:${isrc.trim().uppercase()}")
-        json.optString("id").takeIf { it.isNotBlank() && !json.has("error") }
+        val id = json.optString("id").takeIf { it.isNotBlank() && !json.has("error") }
+        if (id != null) {
+            Log.d(TAG, "deezerIdForIsrc: found exact Deezer track id $id for ISRC $isrc")
+        }
+        id
     }.getOrNull()
 
-    /** Fallback lookup: best Deezer track match for a free-text "title artist". */
-    fun searchTrackId(query: String): String? = runCatching {
-        val enc = URLEncoder.encode(query, "UTF-8")
-        val json = callPublicApi("search/track?q=$enc&limit=1")
-        json.optJSONArray("data")?.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+    /**
+     * Fallback lookup: searches Deezer public API and scores candidates against
+     * expected title, artist, and duration for maximum accuracy.
+     */
+    fun searchTrackId(
+        query: String,
+        expectedTitle: String? = null,
+        expectedArtist: String? = null,
+        expectedDurationSec: Int? = null,
+    ): String? = runCatching {
+        val enc = URLEncoder.encode(query.trim(), "UTF-8")
+        val json = callPublicApi("search/track?q=$enc&limit=10")
+        val dataArr = json.optJSONArray("data") ?: return@runCatching null
+        if (dataArr.length() == 0) return@runCatching null
+
+        if (expectedTitle.isNullOrBlank() && expectedArtist.isNullOrBlank()) {
+            return@runCatching dataArr.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+        }
+
+        fun clean(t: String) = t.lowercase()
+            .replace(Regex("""\s*[\(\[]\s*(feat|ft|with|prod)\.?\s+.*?[\]\)]"""), "")
+            .replace(Regex("""\s*[-–—:]\s*(feat|ft|with|prod)\.?\s+.*$"""), "")
+            .replace(Regex("""\s*[-–—]?\s*[\(\[]?\s*(\d{4}\s+)?remaster(ed)?(\s+\d{4})?\s*[\)\]]?"""), "")
+            .replace(Regex("""\s*[-–—]?\s*[\(\[]?\s*(radio\s+edit|single\s+version|original\s+mix|album\s+version|deluxe\s+edition|bonus\s+track)\s*[\)\]]?"""), "")
+            .replace(Regex("""[^a-z0-9]"""), "")
+
+        val cleanExpTitle = clean(expectedTitle.orEmpty())
+        val artistSplitRegex = Regex("""(?i)\s*(?:,|\band\b|&|\bfeat\.?|\bft\.?|\bwith\b|\bx\b)\s*""")
+        val expectedArtists = expectedArtist.orEmpty().split(artistSplitRegex)
+            .map { it.lowercase().filter { c -> c.isLetterOrDigit() } }
+            .filter { it.isNotBlank() }
+        val primaryExpArtist = expectedArtists.firstOrNull().orEmpty()
+
+        var bestId: String? = null
+        var bestScore = -100.0
+
+        for (i in 0 until dataArr.length()) {
+            val item = dataArr.optJSONObject(i) ?: continue
+            val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+            val itemTitle = item.optString("title_short").ifBlank { item.optString("title") }
+            val itemArtist = item.optJSONObject("artist")?.optString("name").orEmpty()
+            val itemDur = item.optInt("duration", 0)
+
+            val cleanCandTitle = clean(itemTitle)
+            val candArtist = itemArtist.lowercase().filter { it.isLetterOrDigit() }
+
+            var score = 0.0
+            if (cleanExpTitle.isNotEmpty()) {
+                if (cleanCandTitle == cleanExpTitle) score += 5.0
+                else if (cleanCandTitle.contains(cleanExpTitle) || cleanExpTitle.contains(cleanCandTitle)) score += 3.5
+            }
+            if (expectedArtists.isNotEmpty()) {
+                if (candArtist.isNotEmpty() && candArtist == primaryExpArtist) score += 4.0
+                else if (candArtist.isNotEmpty() && (candArtist.contains(primaryExpArtist) || primaryExpArtist.contains(candArtist))) score += 3.0
+                else if (expectedArtists.any { candArtist.contains(it) || it.contains(candArtist) }) score += 2.5
+            }
+            if (expectedDurationSec != null && expectedDurationSec > 0 && itemDur > 0) {
+                val diff = kotlin.math.abs(itemDur - expectedDurationSec)
+                if (diff <= 2) score += 4.0
+                else if (diff <= 5) score += 2.5
+                else if (diff <= 10) score += 1.0
+                else if (diff > 25) score -= 4.0
+            }
+
+            // Version checks: penalize remix/live/cover/sped up/slowed if not in expected title
+            val itemLower = item.optString("title").lowercase()
+            val expectedLower = expectedTitle?.lowercase().orEmpty()
+            val penalties = listOf("remix", "live", "cover", "karaoke", "acoustic", "instrumental", "sped up", "slowed", "nightcore", "8d audio", "tribute")
+            for (p in penalties) {
+                if (itemLower.contains(p) && !expectedLower.contains(p)) {
+                    score -= 6.0
+                }
+            }
+
+            if (score > bestScore) {
+                bestScore = score
+                bestId = id
+            }
+        }
+
+        if (bestId != null && bestScore >= 3.0) {
+            Log.d(TAG, "searchTrackId: matched Deezer track $bestId (score=$bestScore) for query '$query'")
+            bestId
+        } else {
+            // Fall back to best scored result or first result
+            bestId ?: dataArr.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+        }
     }.getOrNull()
 
     /** Fetch the private stream token + CDN origin for a Deezer track id. */
     fun trackTokens(deezerId: String): TrackTokens? = runCatching {
         authorize()
         val results = callGwApi("song.getListData", "{\"sng_ids\": [$deezerId]}")
-            .getJSONObject("results")
-        val data = results.getJSONArray("data").getJSONObject(0)
+            .optJSONObject("results") ?: return@runCatching null
+        val dataArr = results.optJSONArray("data") ?: return@runCatching null
+        if (dataArr.length() == 0) return@runCatching null
+        val data = dataArr.getJSONObject(0)
         TrackTokens(
-            id = data.getString("SNG_ID"),
+            id = data.optString("SNG_ID", deezerId),
             trackToken = data.getString("TRACK_TOKEN"),
             md5origin = data.optString("MD5_ORIGIN"),
             mediaVersion = data.optString("MEDIA_VERSION"),
@@ -175,23 +263,35 @@ internal object DeezerSession {
         val out = JSONObject(data)
 
         if ((token == null || token == "null") && method == "deezer.getUserData") {
-            val results = out.getJSONObject("results")
-            token = results.getString("checkForm")
-            sid = results.getString("SESSION_ID")
-            runCatching {
-                val options = results.getJSONObject("USER").getJSONObject("OPTIONS")
-                licenseToken = options.getString("license_token")
+            val results = out.optJSONObject("results")
+            if (results != null) {
+                token = results.optString("checkForm").takeIf { it.isNotBlank() } ?: results.optString("api_token")
+                sid = results.optString("SESSION_ID").takeIf { it.isNotBlank() }
+                
+                val user = results.optJSONObject("USER")
+                val options = user?.optJSONObject("OPTIONS") ?: results.optJSONObject("OPTIONS") ?: org.json.JSONObject()
+                
+                licenseToken = options.optString("license_token").takeIf { it.isNotBlank() }
+                    ?: user?.optString("USER_TOKEN")?.takeIf { it.isNotBlank() }
+                    ?: user?.optString("license_token")?.takeIf { it.isNotBlank() }
+                    ?: options.optString("web_streaming_token")?.takeIf { it.isNotBlank() }
+                    ?: options.optString("mobile_streaming_token")?.takeIf { it.isNotBlank() }
+                    ?: results.optString("license_token")?.takeIf { it.isNotBlank() }
+                
                 entitledQuality = qufrom(options)
-                authorized = true
-            }.onFailure { Log.w(TAG, "No license token — account may be logged out: $it") }
+                if (token != null && sid != null) {
+                    authorized = true
+                    Log.d(TAG, "Deezer authorized successfully. Tier quality=$entitledQuality, hasLicenseToken=${licenseToken != null}")
+                }
+            }
         }
         return out
     }
 
     /** Map account OPTIONS flags → highest entitled quality id. */
     private fun qufrom(options: JSONObject): Int = when {
-        options.optBoolean("web_lossless") || options.optBoolean("mobile_lossless") -> QUALITY_FLAC
-        options.optBoolean("web_hq") || options.optBoolean("mobile_hq") -> QUALITY_MP3_320
+        options.optBoolean("web_lossless") || options.optBoolean("mobile_lossless") || options.optBoolean("lossless") -> QUALITY_FLAC
+        options.optBoolean("web_hq") || options.optBoolean("mobile_hq") || options.optBoolean("hq") -> QUALITY_MP3_320
         else -> QUALITY_MP3_128
     }
 

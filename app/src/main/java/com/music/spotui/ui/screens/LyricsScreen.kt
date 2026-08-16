@@ -112,7 +112,18 @@ fun LyricsScreen(
                 .padding(16.dp, 8.dp)
         ) {
             Column(modifier = Modifier.padding(end = 12.dp)) {
-                Text("Lyrics", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Lyrics", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    if (state is LyricsViewModel.State.Loaded) {
+                        val isSynced = (state as LyricsViewModel.State.Loaded).lyrics.synced
+                        Text(
+                            text = if (isSynced) " • Synchronized" else " • Plain text",
+                            color = if (isSynced) Color(0xFF1ED760) else Color.White.copy(alpha = 0.5f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
                 Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Icon(
@@ -205,7 +216,22 @@ fun InlineLyrics(
             ) { onExpand() }
             .padding(20.dp)
     ) {
-        Text("Lyrics preview", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Lyrics preview", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            if (state is LyricsViewModel.State.Loaded) {
+                val isSynced = (state as LyricsViewModel.State.Loaded).lyrics.synced
+                Text(
+                    text = if (isSynced) "SYNCED" else "PLAIN",
+                    color = if (isSynced) Color(0xFF1ED760) else Color.White.copy(alpha = 0.6f),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
         androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(12.dp))
 
         when (val s = state) {

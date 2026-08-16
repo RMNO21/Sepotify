@@ -146,7 +146,7 @@ fun HomeFeedContent(navController: NavController, feed: HomeFeedModel) {
     val carousels = if (gridSection != null) sections.drop(1) else sections
 
     LazyColumn(
-        contentPadding = PaddingValues(bottom = 130.dp),
+        contentPadding = PaddingValues(bottom = 160.dp),
         modifier = Modifier
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
@@ -737,7 +737,7 @@ fun ImageCard(
                 }
             }
         }
-        Spacer(modifier = Modifier.height(100.dp))
+        Spacer(modifier = Modifier.height(160.dp))
     }
 }
 
@@ -750,7 +750,7 @@ fun OfflineHomeScreen(navController: NavController) {
     val downloadedPlaylists = remember { com.music.spotui.data.preferences.getDownloadedPlaylists(context) }
 
     LazyColumn(
-        contentPadding = PaddingValues(bottom = 130.dp),
+        contentPadding = PaddingValues(bottom = 160.dp),
         modifier = Modifier
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
