@@ -64,8 +64,7 @@ app/build/outputs/apk/release/app-release.apk
 ## 👨‍💻 Credits & Attribution
 
 - **Sepotify Core Enhancement & Maintenance**: [@RMNO21](https://github.com/RMNO21)
-- **Original Project Basis**: [Spotui](https://github.com/Spotui/Spotui)
-- Built on top of [Meld](https://github.com/), [Neptune](https://github.com/navneet851/spotify-clone-jetpack-compose), [SpotiFLAC](https://github.com/spotbye/SpotiFLAC), and [SimpMusic](https://github.com/maxrave-dev/SimpMusic).
+- Built on top of [Meld](https://github.com/), [Neptune](https://github.com/navneet851/spotify-clone-jetpack-compose),  [Spotui](https://github.com/Spotui/Spotui)و [SpotiFLAC](https://github.com/spotbye/SpotiFLAC), and [SimpMusic](https://github.com/maxrave-dev/SimpMusic).
 
 ---
 
