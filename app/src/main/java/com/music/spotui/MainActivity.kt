@@ -43,6 +43,14 @@ import com.music.spotui.ui.components.UpdatePrompt
 import com.music.spotui.ui.notification.PlaybackService
 import com.music.spotui.ui.theme.SpotuiTheme
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
+import android.widget.Toast
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -81,7 +89,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             SpotuiTheme {
                 var showSplash by remember { mutableStateOf(true) }
-                val isOnline by NetworkMonitor.isOnline.collectAsState(initial = true)
+                val isOnline by NetworkMonitor.isOnline.collectAsState()
+                val context = LocalContext.current
+
+                val dotColor by animateColorAsState(
+                    targetValue = if (isOnline) Color(0xFF2196F3) else Color(0xFFF44336),
+                    animationSpec = tween(durationMillis = 300),
+                    label = "network_status_dot_color"
+                )
 
                 Box(
                     modifier = Modifier
@@ -97,11 +112,22 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(end = 16.dp, top = 8.dp)
+                            .zIndex(100f)
                             .size(10.dp)
-                            .background(
-                                color = if (isOnline) Color(0xFF2196F3) else Color(0xFFF44336),
-                                shape = CircleShape
-                            )
+                            .clip(CircleShape)
+                            .background(dotColor)
+                            .border(1.dp, Color.Black.copy(alpha = 0.7f), CircleShape)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                NetworkMonitor.triggerProbe(context)
+                                Toast.makeText(
+                                    context,
+                                    if (isOnline) "Connected • Online" else "Offline • Only downloaded tracks available",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                     )
 
                     SplashScreenView(

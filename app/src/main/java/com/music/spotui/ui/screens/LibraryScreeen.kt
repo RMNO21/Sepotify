@@ -125,7 +125,7 @@ fun LibraryScreen(navController: NavController) {
     val isRefreshing by libraryViewModel.isRefreshing.collectAsState()
     val context = LocalContext.current
 
-    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
     var showAccount by remember { mutableStateOf(false) }
     var gridView by remember { mutableStateOf(isLibraryGridView(context)) }
     var selectedFilter by remember(isOnline) { mutableStateOf(if (isOnline) "All" else "Downloaded") }

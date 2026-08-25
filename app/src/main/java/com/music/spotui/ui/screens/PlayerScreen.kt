@@ -258,7 +258,7 @@ fun PlayerScreen(navController: NavController) {
     }
 
     val songsResponse by playerViewModel.songs.collectAsState()
-    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
     val shuffle = playerViewModel.shuffleState.value
     val repeat = playerViewModel.repeatState.value
 
@@ -789,7 +789,7 @@ fun PlayerInfo(
                     ) { onArtistClick() } else Modifier,
                 )
                 val playbackStatus by com.music.spotui.di.SongPlayer.playbackStatus.collectAsState()
-                val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
+                val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
                 when (val st = playbackStatus) {
                     is com.music.spotui.di.SongPlayer.PlaybackStatus.OfflineBufferExhausted -> {
                         val badgeColor = Color(0xFFFF9800)
