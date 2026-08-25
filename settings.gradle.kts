@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "spotui"
+rootProject.name = "Sepotify"
 include(":app")
 include(":spotify")
 include(":innertube")

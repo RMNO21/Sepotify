@@ -59,11 +59,11 @@
             android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.music.spotui.WIDGET_PLAY_PAUSE" />
-                <action android:name="com.music.spotui.WIDGET_NEXT" />
-                <action android:name="com.music.spotui.WIDGET_PREV" />
-                <action android:name="com.music.spotui.WIDGET_PLAY_LATEST" />
-                <action android:name="com.music.spotui.WIDGET_UPDATE" />
+                <action android:name="${applicationId}.WIDGET_PLAY_PAUSE" />
+                <action android:name="${applicationId}.WIDGET_NEXT" />
+                <action android:name="${applicationId}.WIDGET_PREV" />
+                <action android:name="${applicationId}.WIDGET_PLAY_LATEST" />
+                <action android:name="${applicationId}.WIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

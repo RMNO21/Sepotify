@@ -32,9 +32,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
+        val action = intent.action ?: return
         runCatching {
-            when (intent.action) {
-                ACTION_PLAY_PAUSE -> {
+            when {
+                action == ACTION_PLAY_PAUSE || action.endsWith(".WIDGET_PLAY_PAUSE") -> {
                     val state = CurrentSongState.instance
                     val isPlaying = state?.playingState?.value ?: false
                     if (isPlaying) {
@@ -50,15 +51,15 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                     }
                     updateAllWidgets(context)
                 }
-                ACTION_NEXT -> {
+                action == ACTION_NEXT || action.endsWith(".WIDGET_NEXT") -> {
                     SongPlayer.skipToNextTrack(context)
                     updateAllWidgets(context)
                 }
-                ACTION_PREV -> {
+                action == ACTION_PREV || action.endsWith(".WIDGET_PREV") -> {
                     SongPlayer.skipToPreviousTrack(context)
                     updateAllWidgets(context)
                 }
-                ACTION_LIKE -> {
+                action == ACTION_LIKE || action.endsWith(".WIDGET_LIKE") -> {
                     val state = CurrentSongState.instance
                     if (state != null) {
                         val songId = state.songId.value
@@ -75,25 +76,25 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                     }
                     updateAllWidgets(context)
                 }
-                ACTION_SHUFFLE -> {
+                action == ACTION_SHUFFLE || action.endsWith(".WIDGET_SHUFFLE") -> {
                     val state = CurrentSongState.instance
                     if (state != null) {
                         state.updateShuffleState(!state.shuffle.value)
                     }
                     updateAllWidgets(context)
                 }
-                ACTION_REPEAT -> {
+                action == ACTION_REPEAT || action.endsWith(".WIDGET_REPEAT") -> {
                     val state = CurrentSongState.instance
                     if (state != null) {
                         state.updateRepeatState(!state.repeat.value)
                     }
                     updateAllWidgets(context)
                 }
-                ACTION_PLAY_LATEST -> {
+                action == ACTION_PLAY_LATEST || action.endsWith(".WIDGET_PLAY_LATEST") -> {
                     playLatestItem(context)
                     updateAllWidgets(context)
                 }
-                ACTION_UPDATE_WIDGET -> {
+                action == ACTION_UPDATE_WIDGET || action.endsWith(".WIDGET_UPDATE") -> {
                     updateAllWidgets(context)
                 }
             }
