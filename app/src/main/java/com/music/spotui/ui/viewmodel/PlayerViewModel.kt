@@ -152,30 +152,8 @@ class PlayerViewModel @Inject constructor(private val currentSongState: CurrentS
     // Function to play the next song in the album
     fun playNextSongs(queueSongs : List<SongsModel>, context: Context) {
         if (queueSongs.isEmpty()) return
-        // A crossfade is already advancing the queue itself — don't double-skip.
         if (SongPlayer.isCrossfadeActive()) return
-        val cur = currentPositionIn(queueSongs)
-        // Top up the queue with Spotify recommendations as we approach the end.
-        maybeExtendRadio(queueSongs, cur)
-        if (cur >= queueSongs.size - 1 && autoplayRadioEnabled) {
-            // End of the queue (e.g. a single). Don't loop back to the start —
-            // wait for the radio fetch kicked off above to append tracks and
-            // continue into them, like Spotify's autoplay.
-            continueIntoRadio(queueSongs, context)
-            return
-        }
-        val nextIdx = if (cur < queueSongs.size - 1) cur + 1 else 0
-        val nextSong = queueSongs[nextIdx]
-        updateSongState(
-            nextSong.coverUri,
-            nextSong.title,
-            nextSong.singer,
-            true,
-            nextSong.id,
-            nextIdx,
-            nextSong.album
-        )
-        SongPlayer.playSong(nextSong.url, context)
+        SongPlayer.skipToNextTrack(context, forceNextIfRepeat = true)
     }
 
     /**
@@ -267,11 +245,7 @@ class PlayerViewModel @Inject constructor(private val currentSongState: CurrentS
     // Function to play the previous song in the album
     fun playPreviousSong(queueSongs : List<SongsModel>, context: Context) {
         if (queueSongs.isEmpty()) return
-        val cur = currentPositionIn(queueSongs)
-        val prevIdx = if (cur > 0) cur - 1 else queueSongs.size - 1
-        val previousSong = queueSongs[prevIdx]
-        updateSongState(previousSong.coverUri, previousSong.title, previousSong.singer, true, previousSong.id, prevIdx, previousSong.album)
-        SongPlayer.playSong(previousSong.url, context)
+        SongPlayer.skipToPreviousTrack(context)
     }
 
     private fun fetchSongs() = viewModelScope.launch(Dispatchers.IO) {

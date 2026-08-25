@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -267,6 +268,8 @@ fun SettingsScreen(navController: NavController) {
             SectionTitle("Downloads & Storage")
             val storageInfo = remember { com.music.spotui.data.preferences.getDownloadStorageInfo(context) }
             var currentStorage by remember { mutableStateOf(storageInfo) }
+            var quotaBytes by remember { mutableStateOf(com.music.spotui.data.storage.OfflineStorageManager.getStorageQuotaBytes(context)) }
+            var lruEnabled by remember { mutableStateOf(com.music.spotui.data.storage.OfflineStorageManager.isLruEvictionEnabled(context)) }
 
             Column(
                 modifier = Modifier
@@ -276,7 +279,7 @@ fun SettingsScreen(navController: NavController) {
                     .padding(14.dp)
             ) {
                 Text(
-                    text = "Storage Usage",
+                    text = "Storage Quota & Eviction",
                     color = Color.White,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
@@ -290,6 +293,80 @@ fun SettingsScreen(navController: NavController) {
                 )
                 Spacer(Modifier.height(10.dp))
 
+                val quotaOptions = listOf(
+                    5L * 1024 * 1024 * 1024L to "5 GB",
+                    10L * 1024 * 1024 * 1024L to "10 GB",
+                    25L * 1024 * 1024 * 1024L to "25 GB",
+                    Long.MAX_VALUE to "Unlimited"
+                )
+                Text(
+                    text = "Maximum Offline Storage Limit:",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    quotaOptions.forEach { (limit, label) ->
+                        val selected = quotaBytes == limit
+                        Text(
+                            text = label,
+                            color = if (selected) Color.Black else Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selected) AppPalette else Color(0xFF2E2E38))
+                                .clickable {
+                                    quotaBytes = limit
+                                    com.music.spotui.data.storage.OfflineStorageManager.setStorageQuotaBytes(context, limit)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF24242C))
+                        .clickable {
+                            val next = !lruEnabled
+                            lruEnabled = next
+                            com.music.spotui.data.storage.OfflineStorageManager.setLruEvictionEnabled(context, next)
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-Evict Least Recently Used (LRU)",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (lruEnabled) "Automatically removes oldest played tracks when approaching limit" else "Never deletes downloaded tracks automatically",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = lruEnabled,
+                        onCheckedChange = {
+                            lruEnabled = it
+                            com.music.spotui.data.storage.OfflineStorageManager.setLruEvictionEnabled(context, it)
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
                 Text(
                     text = "App Storage Path:",
                     color = Color.Gray,
@@ -403,13 +480,84 @@ fun SettingsScreen(navController: NavController) {
             }
 
             Spacer(Modifier.height(12.dp))
-            SectionTitle("Spotify Account")
+            SectionTitle("Spotify Account & Sync")
             Text(
                 text = if (isSpotifyLoggedIn) "Connected to Spotify account" else "Not logged in (Guest mode)",
                 color = if (isSpotifyLoggedIn) Color(0xFF00C7B7) else Color(0xFFB3B3B3),
                 fontSize = 13.sp,
                 modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 6.dp),
             )
+
+            if (isSpotifyLoggedIn) {
+                val syncState by com.music.spotui.data.api.SpotifySync.syncState.collectAsState()
+                val lastSyncTime = remember(syncState) { com.music.spotui.data.api.SpotifySync.getLastSyncTimestamp(context) }
+                val lastSyncLabel = remember(lastSyncTime) {
+                    if (lastSyncTime <= 0L) "Not synced yet"
+                    else {
+                        val diffMins = (System.currentTimeMillis() - lastSyncTime) / 60_000L
+                        if (diffMins < 1) "Synced just now"
+                        else if (diffMins < 60) "Synced ${diffMins}m ago"
+                        else "Synced ${diffMins / 60}h ago"
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF1A1A20))
+                        .padding(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Spotify Library Sync",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = when (val s = syncState) {
+                                    is com.music.spotui.data.api.SyncState.Syncing -> s.message
+                                    is com.music.spotui.data.api.SyncState.Success -> "Synced ${s.itemsSynced} items ✓ ($lastSyncLabel)"
+                                    is com.music.spotui.data.api.SyncState.Error -> s.message
+                                    else -> "Two-way mirror • $lastSyncLabel"
+                                },
+                                color = when (syncState) {
+                                    is com.music.spotui.data.api.SyncState.Error -> Color(0xFFE57373)
+                                    is com.music.spotui.data.api.SyncState.Success -> Color(0xFF00C7B7)
+                                    is com.music.spotui.data.api.SyncState.Syncing -> AppPalette
+                                    else -> Color.Gray
+                                },
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        val isSyncing = syncState is com.music.spotui.data.api.SyncState.Syncing
+                        Button(
+                            onClick = { com.music.spotui.data.api.SpotifySync.syncFullLibrary(context, force = true) },
+                            enabled = !isSyncing,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AppPalette,
+                                contentColor = Color.Black
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = if (isSyncing) "Syncing…" else "Sync Now",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
 
             Text(
                 text = if (isSpotifyLoggedIn) "Switch Spotify account / Web Re-login" else "Log in to Spotify (Web)",

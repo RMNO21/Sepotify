@@ -43,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.material3.LinearProgressIndicator
+import kotlinx.coroutines.launch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -516,6 +517,16 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                                     indication = null,
                                                 ) {
                                                     if (!playlistDownloaded) {
+                                                        com.music.spotui.data.storage.DownloadSyncManager.syncScope.launch {
+                                                            com.music.spotui.data.storage.DownloadSyncManager.setPlaylistDownloadEnabled(
+                                                                context = context,
+                                                                playlistId = playlistId,
+                                                                playlistTitle = currentName,
+                                                                coverUri = playlist.coverUri,
+                                                                songs = songs,
+                                                                enabled = true
+                                                            )
+                                                        }
                                                         SongPlayer.downloadAll(songs, context, playlistId, currentName)
                                                         android.widget.Toast.makeText(
                                                             context,

@@ -222,7 +222,7 @@ fun LibraryScreen(navController: NavController) {
     val pullToRefreshState = rememberPullToRefreshState()
     if (pullToRefreshState.isRefreshing) {
         LaunchedEffect(true) {
-            libraryViewModel.refresh()
+            libraryViewModel.refresh(context)
         }
     }
     LaunchedEffect(isRefreshing) {

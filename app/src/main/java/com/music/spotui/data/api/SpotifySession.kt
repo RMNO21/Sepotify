@@ -34,6 +34,10 @@ object SpotifySession {
         return prefs.getString(KEY_SP_DC, null)?.takeIf { it.isNotBlank() } ?: DEFAULT_SP_DC
     }
 
+    fun isLoggedIn(context: Context): Boolean {
+        return spDc(context).isNotBlank()
+    }
+
     fun setSpDc(context: Context, value: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()

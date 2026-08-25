@@ -42,9 +42,18 @@ class LikedSongsViewModel @Inject constructor(
     }
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            repository.provideLikedSongs().collect { _songs.value = it }
+        load()
+    }
+
+    fun load() = viewModelScope.launch(Dispatchers.IO) {
+        repository.provideLikedSongs().collect { _songs.value = it }
+    }
+
+    fun refresh(context: android.content.Context? = null) = viewModelScope.launch(Dispatchers.IO) {
+        if (context != null) {
+            com.music.spotui.data.api.SpotifySync.syncFullLibrary(context)
         }
+        repository.provideLikedSongs().collect { _songs.value = it }
     }
 
     /** Drops an unliked song from the displayed list without a refetch. */
@@ -55,3 +64,4 @@ class LikedSongsViewModel @Inject constructor(
         }
     }
 }
+

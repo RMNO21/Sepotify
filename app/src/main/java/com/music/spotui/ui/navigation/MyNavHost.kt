@@ -57,12 +57,9 @@ fun MyNavHost(
 //    player = ExoPlayer.Builder(context).build()
 
     val context = LocalContext.current
-    // First launch (no Spotify session and not in guest mode) lands on the login screen.
-    val startDestination = if (SpotifySession.spDc(context).isBlank() && !SpotifySession.isGuestMode(context)) {
-        Routes.Login.route
-    } else {
-        Routes.Home.route
-    }
+    val hasSpotify = SpotifySession.spDc(context).isNotBlank()
+
+    val startDestination = if (!hasSpotify) Routes.Login.route else Routes.Home.route
 
     // Restore the last session: put the track back into the mini player (paused)
     // and arm the player to resume from the saved position on the first play tap.

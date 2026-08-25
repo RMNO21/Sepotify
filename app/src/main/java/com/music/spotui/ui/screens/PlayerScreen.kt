@@ -31,13 +31,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
@@ -326,16 +326,7 @@ fun PlayerScreen(navController: NavController) {
 
 
 
-    if((songProgressText != "0:00") && (songDurationText == songProgressText)){
-        if(repeat){
-            SongPlayer.seekTo(0)
-        }
-        else{
-            // Debounced: this block re-runs every recomposition until the next
-            // track's stream actually starts, so it must not skip repeatedly.
-            playerViewModel.autoAdvance(queueSongs, context)
-        }
-    }
+    // Auto-advance and repeat are handled reliably at the audio engine level (SongPlayer.kt / ExoPlayer listener)
 
     Log.d("queueSongaa", songs.toString())
     Log.d("queueSongc", playerViewModel.currentSongAlbum.value.toString())
@@ -800,6 +791,37 @@ fun PlayerInfo(
                 val playbackStatus by com.music.spotui.di.SongPlayer.playbackStatus.collectAsState()
                 val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState(initial = true)
                 when (val st = playbackStatus) {
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.OfflineBufferExhausted -> {
+                        val badgeColor = Color(0xFFFF9800)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 3.dp)
+                                .clickable {
+                                    val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
+                                    if (downloaded.isNotEmpty()) {
+                                        com.music.spotui.di.SongPlayer.playSong(downloaded.first().url, context)
+                                    } else {
+                                        com.music.spotui.di.SongPlayer.showShortToast(context, "No offline downloads available")
+                                    }
+                                },
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = "Offline • Buffer exhausted • Tap to play downloads",
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
                     is com.music.spotui.di.SongPlayer.PlaybackStatus.Error -> {
                         val badgeColor = Color(0xFFFF5252)
                         Row(
@@ -1641,7 +1663,7 @@ fun PlayerMenuRow(
         )
         if (trailingArrow) {
             Icon(
-                imageVector = Icons.Default.KeyboardArrowRight,
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 tint = Color.Gray,
                 modifier = Modifier.size(20.dp),
                 contentDescription = null

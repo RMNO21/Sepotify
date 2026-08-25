@@ -434,6 +434,16 @@ fun isPlaylistAutoDownload(context: Context, playlistId: String): Boolean {
     return prefs.getStringSet(KEY_AUTO_DL_PLAYLISTS, emptySet())?.contains(playlistId) == true
 }
 
+fun isPublicStorageExportEnabled(context: Context): Boolean {
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    return prefs.getBoolean("pref_public_storage_export", false)
+}
+
+fun setPublicStorageExportEnabled(context: Context, enabled: Boolean) {
+    val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+    prefs.edit().putBoolean("pref_public_storage_export", enabled).apply()
+}
+
 fun checkAndAutoDownloadPlaylistNewTracks(
     context: Context,
     playlistId: String,

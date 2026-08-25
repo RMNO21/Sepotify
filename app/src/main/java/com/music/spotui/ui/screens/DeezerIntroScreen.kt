@@ -99,7 +99,7 @@ fun DeezerIntroScreen(navController: NavController) {
             Spacer(Modifier.height(36.dp))
             Button(
                 onClick = {
-                    navController.navigate("${Routes.DeezerLogin.route}?next=home")
+                    navController.navigate("${Routes.DeezerLogin.route}?next=onboarding")
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(DEEZER_PURPLE),
@@ -110,17 +110,6 @@ fun DeezerIntroScreen(navController: NavController) {
             ) {
                 Text("Log in to Deezer", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, fontSize = 16.sp)
             }
-            Spacer(Modifier.height(10.dp))
-            TextButton(onClick = goHome, modifier = Modifier.fillMaxWidth()) {
-                Text("Skip for now", color = Color(0xFFB3B3B3), fontSize = 14.sp)
-            }
-            Text(
-                "You can connect Deezer any time from Settings.",
-                color = Color(0xFF6A6A6A),
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 4.dp),
-            )
         }
     }
 }

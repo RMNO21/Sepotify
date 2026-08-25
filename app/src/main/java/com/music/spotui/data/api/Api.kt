@@ -822,30 +822,41 @@ class Api @Inject constructor(
     suspend fun getLikedSongs(): Flow<Response<List<SongsModel>>> = flow {
         emit(Response.Loading())
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) {
-            val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
-            emit(Response.Success(offlineSongs))
+            val cached = OfflineCache.getPlaylistSongs(context, "liked_songs")
+            if (!cached.isNullOrEmpty()) {
+                emit(Response.Success(cached))
+            } else {
+                val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
+                emit(Response.Success(offlineSongs))
+            }
             return@flow
         }
         Spotify.likedSongs(limit = 50).fold(
             onSuccess = { first ->
                 val models = first.items.map { it.track.toSongModel() }.toMutableList()
-                models.forEach { com.music.spotui.data.preferences.addLikedSongId(context, it.id.toString()) }
+                models.forEach { com.music.spotui.data.preferences.addLikedSong(context, it) }
                 emit(Response.Success(models.toList()))
                 var offset = first.items.size
                 while (offset < first.total && first.items.isNotEmpty()) {
                     val page = Spotify.likedSongs(limit = 50, offset = offset).getOrNull() ?: break
                     if (page.items.isEmpty()) break
                     val pageModels = page.items.map { it.track.toSongModel() }
-                    pageModels.forEach { com.music.spotui.data.preferences.addLikedSongId(context, it.id.toString()) }
+                    pageModels.forEach { com.music.spotui.data.preferences.addLikedSong(context, it) }
                     models += pageModels
                     offset += page.items.size
                     emit(Response.Success(models.toList()))
                 }
+                OfflineCache.savePlaylistSongs(context, "liked_songs", models)
             },
             onFailure = {
                 Log.e("Api", "getLikedSongs failed", it)
-                val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
-                emit(Response.Success(offlineSongs))
+                val cached = OfflineCache.getPlaylistSongs(context, "liked_songs")
+                if (!cached.isNullOrEmpty()) {
+                    emit(Response.Success(cached))
+                } else {
+                    val offlineSongs = com.music.spotui.data.preferences.getDownloadedSongs(context)
+                    emit(Response.Success(offlineSongs))
+                }
             },
         )
     }

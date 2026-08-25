@@ -94,13 +94,6 @@ fun SpotifyLoginScreen(navController: NavController) {
         }
     }
 
-    val skipToHome: () -> Unit = {
-        SpotifySession.setGuestMode(context, true)
-        navController.navigate(Routes.Home.route) {
-            popUpTo(Routes.Login.route) { inclusive = true }
-        }
-    }
-
     // Poll for the sp_dc cookie — it's set on .spotify.com the moment login succeeds
     LaunchedEffect(Unit) {
         while (true) {
@@ -214,16 +207,9 @@ fun SpotifyLoginScreen(navController: NavController) {
             TextButton(onClick = { showManualCookieDialog = true }) {
                 Text("Cookie", color = Color(SPOTIFY_GREEN), fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-
-            TextButton(onClick = {
-                // Allow user to continue straight to the app without signing into Spotify
-                skipToHome()
-            }) {
-                Text("Skip", color = Color(0xFFB3B3B3), fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            }
         }
 
-        // Bottom helper bar for alternate login or bypass
+        // Bottom helper bar for alternate login URL
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -231,19 +217,13 @@ fun SpotifyLoginScreen(navController: NavController) {
                 .navigationBarsPadding()
                 .background(Color(0xE6121212))
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = {
                 webViewRef?.loadUrl("https://open.spotify.com/")
             }) {
                 Text("Try open.spotify.com", color = Color(SPOTIFY_GREEN), fontSize = 12.sp)
-            }
-
-            TextButton(onClick = {
-                skipToHome()
-            }) {
-                Text("Continue as Guest / Offline →", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 

@@ -47,13 +47,19 @@ object SpotifyMapper {
      * Clean track title for query building, stripping noise that causes YouTube search mismatches.
      */
     fun cleanTitleForSearch(title: String): String {
-        return title
+        return stripDiacritics(title)
             .replace(FEAT_PATTERN, "")
             .replace(REMASTER_PATTERN, "")
             .replace(RADIO_EDIT_PATTERN, "")
             .replace(AUDIO_TAG_PATTERN, "")
+            .replace(Regex("""\s*[-–—]?\s*[\(\[]?\s*(deluxe|anniversary|bonus track|soundtrack|ost)\s*[\)\]]?""", RegexOption.IGNORE_CASE), "")
             .replace(MULTI_SPACE_PATTERN, " ")
             .trim()
+    }
+
+    private fun stripDiacritics(str: String): String {
+        val nfd = java.text.Normalizer.normalize(str, java.text.Normalizer.Form.NFD)
+        return nfd.replace(Regex("""\p{InCombiningDiacriticalMarks}+"""), "")
     }
 
     /**
@@ -61,13 +67,21 @@ object SpotifyMapper {
      */
     fun buildSearchQueries(title: String, artist: String): List<String> {
         val cleanTitle = cleanTitleForSearch(title)
-        val cleanArtist = artist.replace(FEAT_PATTERN, "").trim()
+        val cleanArtist = stripDiacritics(artist.replace(FEAT_PATTERN, "").trim())
+        val primaryArtist = cleanArtist.split(Regex("""(?i)\s*(?:,|\band\b|&|\bfeat\.?|\bft\.?|\bwith\b|\bx\b)\s*"""))
+            .firstOrNull { it.isNotBlank() }?.trim() ?: cleanArtist
+
         val queries = mutableListOf<String>()
 
-        if (cleanArtist.isNotBlank() && cleanTitle.isNotBlank()) {
-            queries.add("$cleanArtist $cleanTitle")
-            queries.add("$cleanArtist $cleanTitle official audio")
-            queries.add("$cleanTitle $cleanArtist")
+        if (primaryArtist.isNotBlank() && cleanTitle.isNotBlank()) {
+            queries.add("$cleanTitle $primaryArtist")
+            queries.add("$primaryArtist $cleanTitle")
+            queries.add("$cleanTitle $primaryArtist official audio")
+            queries.add("$cleanTitle $primaryArtist topic")
+            if (cleanArtist != primaryArtist) {
+                queries.add("$cleanTitle $cleanArtist")
+                queries.add("$cleanArtist $cleanTitle")
+            }
         } else if (cleanTitle.isNotBlank()) {
             queries.add(cleanTitle)
         } else if (artist.isNotBlank()) {
@@ -190,7 +204,7 @@ object SpotifyMapper {
     }
 
     private fun normalizeTitle(title: String): String {
-        return title.lowercase()
+        return stripDiacritics(title).lowercase()
             .replace(FEAT_PATTERN, "")
             .replace(BRACKET_PATTERN, "")
             .replace(REMASTER_PATTERN, "")

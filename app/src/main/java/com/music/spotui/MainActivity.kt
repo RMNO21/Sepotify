@@ -13,9 +13,12 @@ import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.collectAsState
@@ -49,7 +52,6 @@ class MainActivity : ComponentActivity() {
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op */ }
 
-    @OptIn(UnstableApi::class)
     @RequiresApi(Build.VERSION_CODES.S)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -81,14 +83,19 @@ class MainActivity : ComponentActivity() {
                 var showSplash by remember { mutableStateOf(true) }
                 val isOnline by NetworkMonitor.isOnline.collectAsState(initial = true)
 
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .statusBarsPadding()
+                        .consumeWindowInsets(WindowInsets.statusBars)
+                ) {
                     App()
 
                     // Top-corner online/offline status dot (Blue = Online, Red = Offline)
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .statusBarsPadding()
                             .padding(end = 16.dp, top = 8.dp)
                             .size(10.dp)
                             .background(

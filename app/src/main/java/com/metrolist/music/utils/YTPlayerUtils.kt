@@ -12,8 +12,7 @@ import androidx.media3.common.PlaybackException
 import com.metrolist.innertube.NewPipeExtractor
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.YouTubeClient
-import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_CREATOR
-import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_VR_1_43_32
+import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_NO_SDK
 import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_VR_1_61_48
 import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_VR_NO_AUTH
 import com.metrolist.innertube.models.YouTubeClient.Companion.IOS
@@ -47,21 +46,27 @@ object YTPlayerUtils {
         .retryOnConnectionFailure(true)
         .build()
 
+    private val probeClient = OkHttpClient.Builder()
+        .proxy(YouTube.proxy)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .fastFallback(true)
+        .build()
+
     private val poTokenGenerator = PoTokenGenerator()
 
     private val MAIN_CLIENT: YouTubeClient = IOS
 
     private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
-        ANDROID_VR_1_61_48,
-        ANDROID_VR_1_43_32,
-        ANDROID_CREATOR,
-        TVHTML5_SIMPLY_EMBEDDED_PLAYER,  // Try embedded player for age-restricted content
-        IPADOS,
-        ANDROID_VR_NO_AUTH,
-        WEB_REMIX,
+        ANDROID_NO_SDK,
         MOBILE,
-        WEB,
+        TVHTML5_SIMPLY_EMBEDDED_PLAYER,
+        WEB_REMIX,
         TVHTML5,
+        IPADOS,
+        ANDROID_VR_1_61_48,
+        ANDROID_VR_NO_AUTH,
+        WEB,
         WEB_CREATOR
     )
     data class PlaybackData(
@@ -369,6 +374,23 @@ object YTPlayerUtils {
 
         val effectiveResponse = streamPlayerResponse ?: mainPlayerResponse
         if (effectiveResponse == null || format == null || streamUrl == null) {
+            val pipedStream = com.music.spotui.piped.PipedSource.resolveAudioStream(videoId)
+            if (pipedStream != null) {
+                Timber.tag(TAG).i("InnerTube clients failed; successfully recovered stream via Piped fallback for videoId=$videoId")
+                return@runCatching PlaybackData(
+                    audioConfig = null,
+                    videoDetails = effectiveResponse?.videoDetails,
+                    playbackTracking = null,
+                    format = PlayerResponse.StreamingData.Format(
+                        itag = 251,
+                        url = pipedStream.url,
+                        mimeType = pipedStream.mimeType,
+                        bitrate = pipedStream.bitrate,
+                    ),
+                    streamUrl = pipedStream.url,
+                    streamExpiresInSeconds = 21600,
+                )
+            }
             Timber.tag(logTag).e("Bad stream player response - all clients failed for videoId=$videoId")
             if (isUploadedTrack) {
                 println("[PLAYBACK_DEBUG] FAILURE: All clients failed for uploaded track videoId=$videoId")
@@ -475,7 +497,7 @@ object YTPlayerUtils {
                 requestBuilder.addHeader("Cookie", cookie)
             }
 
-            val response = httpClient.newCall(requestBuilder.build()).execute()
+            val response = probeClient.newCall(requestBuilder.build()).execute()
             val code = response.code
             response.close()
             val accepted = response.isSuccessful || code in 200..399 || code == 405

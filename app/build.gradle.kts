@@ -12,11 +12,11 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.sepotify.music.app"
+        applicationId = "com.aistudio.spotui.player.v2"
         minSdk = 24
         targetSdk = 34
-        versionCode = 100
-        versionName = "2.1.0"
+        versionCode = 101
+        versionName = "2.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -110,6 +110,7 @@ dependencies {
     //exoplayer
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-exoplayer-dash:1.3.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.3.1")
     // PlayerView for the Spotify Canvas looping video on the now-playing screen.
     implementation("androidx.media3:media3-ui:1.3.1")
     // media session + system media notification (lock screen / notification center)
@@ -118,11 +119,17 @@ dependencies {
     //WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
+    //Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+
     //Storage Access Framework folder enumeration (local music import)
     implementation("androidx.documentfile:documentfile:1.0.1")
 
     //okhttp + timber (used by the ported YouTube streaming flow)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 

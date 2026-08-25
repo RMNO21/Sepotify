@@ -53,9 +53,23 @@ class MyApplication : Application(){
 
         // Warm the Home feed cache so the first navigation to Home is instant.
         // No-op (gracefully) until a Spotify token is available.
+        com.music.spotui.player.LocalMediaProxyServer.start(this)
+        com.music.spotui.resolver.RemoteExtractionEngine.init(this)
+        com.music.spotui.data.network.NetworkMonitor.init(this)
+        com.music.spotui.worker.PlaylistSyncWorker.schedule(this)
+        appScope.launch {
+            com.music.spotui.innertube.AntiBotDefense.syncVisitorData(this@MyApplication)
+        }
+        appScope.launch {
+            com.music.spotui.data.storage.OfflineStorageManager.runStartupHealthCheck(this@MyApplication)
+        }
+        appScope.launch {
+            com.music.spotui.data.api.SpotifySync.flushPendingQueue(this@MyApplication)
+        }
         val api = Api(this)
         appScope.launch { runCatching { api.getHomeFeed().collect {} } }
         appScope.launch { runCatching { api.getAlbums().collect {} } }
         appScope.launch { runCatching { api.getArtists().collect {} } }
     }
 }
+

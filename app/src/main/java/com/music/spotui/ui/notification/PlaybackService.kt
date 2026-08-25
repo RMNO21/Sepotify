@@ -77,6 +77,7 @@ class PlaybackService : MediaLibraryService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var isNoisyReceiverRegistered = false
+    private var audioFocusManager: com.music.spotui.audio.AudioFocusManager? = null
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -95,6 +96,17 @@ class PlaybackService : MediaLibraryService() {
         val base = SongPlayer.exoPlayer ?: return
 
         // Register noisy receiver for audio output disconnects (headphones / Bluetooth)
+        audioFocusManager = com.music.spotui.audio.AudioFocusManager(
+            context = this,
+            onPlay = { SongPlayer.play() },
+            onPause = { SongPlayer.pause() },
+            onDuck = { ducked ->
+                if (ducked) SongPlayer.rampVolume(0.2f, 200L)
+                else SongPlayer.rampVolume(1.0f, 200L)
+            },
+            getPlayer = { SongPlayer.exoPlayer }
+        )
+
         try {
             val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -112,6 +124,11 @@ class PlaybackService : MediaLibraryService() {
             currentSongState.playingStateFlow.collect { playing ->
                 updateWakeLock(playing)
                 updateCustomNotificationButtons()
+                if (playing) {
+                    audioFocusManager?.requestFocus()
+                } else {
+                    audioFocusManager?.abandonFocus()
+                }
             }
         }
 
@@ -227,23 +244,11 @@ class PlaybackService : MediaLibraryService() {
 
     /** Advance the in-app queue one step in the given direction and start it. */
     private fun advance(forward: Boolean) {
-        val queue = currentSongState.queue.value
-        if (queue.isEmpty()) return
-        val curId = currentSongState.songId.value
-        val cur = queue.indexOfFirst { it.id == curId }
-            .let { if (it >= 0) it else currentSongState.songIndex.value }
-            .coerceIn(0, queue.size - 1)
-        val nextIdx = if (forward) {
-            if (cur < queue.size - 1) cur + 1 else 0
+        if (forward) {
+            SongPlayer.skipToNextTrack(applicationContext, forceNextIfRepeat = true)
         } else {
-            if (cur > 0) cur - 1 else queue.size - 1
+            SongPlayer.skipToPreviousTrack(applicationContext)
         }
-        val song = queue[nextIdx]
-        currentSongState.updateSongState(
-            song.coverUri, song.title, song.singer, true,
-            song.id, nextIdx, currentSongState.album.value
-        )
-        SongPlayer.playSong(song.url, applicationContext)
     }
 
     private val likeCommand = SessionCommand("CUSTOM_ACTION_LIKE", Bundle.EMPTY)
@@ -522,6 +527,8 @@ class PlaybackService : MediaLibraryService() {
                 // Ignore
             }
         }
+        audioFocusManager?.release()
+        audioFocusManager = null
         wakeLock = null
         serviceScope.cancel()
         SongPlayer.onPlayerSwapped = null

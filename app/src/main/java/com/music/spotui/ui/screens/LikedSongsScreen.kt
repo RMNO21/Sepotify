@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -138,7 +139,35 @@ fun LikedSongsScreen(navController: NavController) {
                         containerColor = Color.Transparent,
                         titleContentColor = Color.White,
                     ),
-                    title = { Text(text = "") }
+                    title = { Text(text = "") },
+                    actions = {
+                        val syncState by com.music.spotui.data.api.SpotifySync.syncState.collectAsState()
+                        val isSyncing = syncState is com.music.spotui.data.api.SyncState.Syncing
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .padding(end = 12.dp)
+                                    .size(20.dp),
+                                color = Color(AppPalette.toArgb()),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Sync Liked Songs",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .padding(end = 8.dp)
+                                    .size(24.dp)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        likedSongsViewModel.refresh(context)
+                                    }
+                            )
+                        }
+                    }
                 )
             }
         ) { innerPadding ->

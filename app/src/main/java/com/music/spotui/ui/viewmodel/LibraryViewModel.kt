@@ -35,9 +35,12 @@ class LibraryViewModel @Inject constructor(private val repository: AppRepository
         loadFollowedArtists()
     }
 
-    fun refresh() = viewModelScope.launch(Dispatchers.IO) {
+    fun refresh(context: android.content.Context? = null) = viewModelScope.launch(Dispatchers.IO) {
         _isRefreshing.value = true
         com.music.spotui.data.api.Api.HomeCache.library = null
+        if (context != null) {
+            com.music.spotui.data.api.SpotifySync.syncFullLibrary(context)
+        }
         loadFollowedArtists()
         loadAccount()
         repository.provideLibrary().collect { resp ->

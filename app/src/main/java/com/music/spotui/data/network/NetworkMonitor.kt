@@ -45,6 +45,9 @@ object NetworkMonitor {
                 object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
                         _isOnline.value = isOnlineNow(appContext)
+                        if (_isOnline.value) {
+                            com.music.spotui.data.api.SpotifySync.flushPendingQueue(appContext)
+                        }
                     }
 
                     override fun onLost(network: Network) {

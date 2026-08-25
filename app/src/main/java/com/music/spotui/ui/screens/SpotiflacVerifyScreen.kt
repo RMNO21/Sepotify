@@ -85,9 +85,9 @@ fun SpotiflacVerifyScreen(navController: NavController, next: String = "") {
                                 ).show()
                                 // Onboarding (Spotify → Deezer → SpotiFLAC) lands Home;
                                 // reached from Settings we just return where we came from.
-                                if (next == "home") {
+                                if (next == "home" || next == "onboarding") {
                                     navController.navigate(Routes.Home.route) {
-                                        popUpTo(Routes.DeezerIntro.route) { inclusive = true }
+                                        popUpTo(Routes.SpotiflacVerify.route) { inclusive = true }
                                     }
                                 } else {
                                     navController.popBackStack()

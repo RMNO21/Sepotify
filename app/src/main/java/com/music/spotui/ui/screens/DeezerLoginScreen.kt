@@ -80,16 +80,17 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                     withContext(Dispatchers.Main) {
                         statusMessage = "Signed in — $tier"
                         delay(400)
-                        if (next == "home") {
+                        if (next == "home" || next == "onboarding") {
                             // Onboarding order is Spotify → Deezer → SpotiFLAC: hand off
-                            // to the SpotiFLAC verification step next (unless already set
-                            // up), keeping DeezerIntro underneath so it lands Home after.
+                            // to the SpotiFLAC verification step next (unless already set up).
                             if (com.music.spotui.data.preferences.hasSpotiflacSession(context)) {
                                 navController.navigate(Routes.Home.route) {
-                                    popUpTo(Routes.DeezerIntro.route) { inclusive = true }
+                                    popUpTo(Routes.DeezerLogin.route) { inclusive = true }
                                 }
                             } else {
-                                navController.navigate("${Routes.SpotiflacVerify.route}?next=home")
+                                navController.navigate("${Routes.SpotiflacVerify.route}?next=onboarding") {
+                                    popUpTo(Routes.DeezerLogin.route) { inclusive = true }
+                                }
                             }
                         } else {
                             navController.popBackStack()

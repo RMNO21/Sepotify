@@ -188,8 +188,8 @@ object LosslessSource {
     private fun get(urlString: String, headers: Map<String, String>): String {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 8_000
-            readTimeout = 8_000
+            connectTimeout = 3_500
+            readTimeout = 3_500
             setRequestProperty("User-Agent", USER_AGENT)
             setRequestProperty("Accept", "application/json, text/plain, */*")
             headers.forEach { (k, v) -> setRequestProperty(k, v) }

@@ -41,9 +41,20 @@ internal object LosslessRegistry {
     private val AAD = "spotiflac|community|url|v1".toByteArray()
 
     // Known-good defaults (used until/if the registry refresh succeeds).
-    private val DEFAULT_TIDAL = listOf("https://tidal.anandserver.cfd")
-    private val DEFAULT_AMAZON = listOf("https://amazon.anandserver.cfd")
-    private val DEFAULT_QOBUZ = listOf("https://qobuz.anandserver.cfd")
+    private val DEFAULT_TIDAL = listOf(
+        "https://tidal.anandserver.cfd",
+        "https://tidal-api.binbash.rocks",
+        "https://tritidal.top",
+        "https://tidal.kinoplus.online",
+    )
+    private val DEFAULT_AMAZON = listOf(
+        "https://amazon.anandserver.cfd",
+        "https://amazon-api.binbash.rocks",
+    )
+    private val DEFAULT_QOBUZ = listOf(
+        "https://qobuz.anandserver.cfd",
+        "https://qobuz-api.binbash.rocks",
+    )
 
     private const val CACHE_TTL_MS = 30 * 60 * 1000L
     @Volatile private var cached: JSONObject? = null
