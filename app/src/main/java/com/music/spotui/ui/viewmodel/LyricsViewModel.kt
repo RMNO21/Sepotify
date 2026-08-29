@@ -30,6 +30,9 @@ class LyricsViewModel @Inject constructor() : ViewModel() {
         val key = "$title|$artist"
         if (!forceReload && loadedKey == key && _state.value !is State.NotFound) return
         loadedKey = key
+        if (forceReload) {
+            LyricsApi.clearCache(title, artist)
+        }
         _state.value = State.Loading
         viewModelScope.launch(Dispatchers.IO) {
             val lyrics = LyricsApi.fetch(title, artist, album, durationSec)

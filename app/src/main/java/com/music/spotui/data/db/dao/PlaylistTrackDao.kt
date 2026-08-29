@@ -24,6 +24,9 @@ interface PlaylistTrackDao {
     @Query("SELECT track_id FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY sort_order ASC")
     suspend fun getTrackIdsForPlaylist(playlistId: String): List<String>
 
+    @Query("SELECT playlist_id FROM playlist_tracks WHERE track_id = :trackId LIMIT 1")
+    suspend fun getPlaylistIdForTrack(trackId: String): String?
+
     @Query("SELECT COUNT(*) FROM playlist_tracks WHERE track_id = :trackId")
     suspend fun countPlaylistsReferencingTrack(trackId: String): Int
 }

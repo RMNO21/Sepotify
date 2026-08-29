@@ -27,6 +27,9 @@ class HomeViewModel @Inject constructor(private val repository: AppRepository)  
     private val _home : MutableStateFlow<Response<HomeFeedModel>> = MutableStateFlow(Response.Loading())
     val home : StateFlow<Response<HomeFeedModel>> = _home
 
+    val isOnline: StateFlow<Boolean> = repository.isOnline
+    val isOffline: StateFlow<Boolean> = repository.isOffline
+
 
     init {
         fetchHome()

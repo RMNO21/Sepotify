@@ -60,7 +60,6 @@ class MainActivity : ComponentActivity() {
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op */ }
 
-    @RequiresApi(Build.VERSION_CODES.S)
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)

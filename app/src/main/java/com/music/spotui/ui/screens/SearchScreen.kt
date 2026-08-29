@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -21,11 +22,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -52,10 +59,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -177,9 +189,12 @@ fun SumUpSearchScreen(
     var text by remember {
         mutableStateOf("")
     }
-    // Recents are the *items opened from results* (songs/artists/albums), not the
-    // typed queries, and only appear once the user taps into the search bar.
+    // Search focus state: activated when user clicks into or focuses the search bar
     var searchFocused by remember { mutableStateOf(false) }
+
+    // Room database reactive stream of recent search queries
+    val recentQueries by searchViewModel.recentSearchQueries.collectAsState()
+
     var recents by remember {
         mutableStateOf(com.music.spotui.data.preferences.getRecentItems(context))
     }
@@ -188,6 +203,7 @@ fun SumUpSearchScreen(
         recents = com.music.spotui.data.preferences.getRecentItems(context)
     }
     // Live Spotify search results for the current query.
+    val isOnline by searchViewModel.isOnline.collectAsState()
     val searchedList = results.songs
     // One relevance-mixed list (songs, artists, albums interleaved) instead of
     // separate type sections — matches how most music apps present search.
@@ -210,12 +226,22 @@ fun SumUpSearchScreen(
 
     ){
         item{
-            SearchTopBar()
+            SearchTopBar(isOnline = isOnline)
         }
         stickyHeader {
             SearchStickyBar(
-                text,
+                text = text,
                 onFocusChange = { searchFocused = it },
+                onClearClick = {
+                    text = ""
+                    searchViewModel.search("")
+                },
+                onSearchAction = {
+                    if (text.isNotBlank()) {
+                        searchViewModel.saveSearchQuery(text)
+                        searchViewModel.search(text)
+                    }
+                }
             ) {
                 text = it
                 searchViewModel.search(it)
@@ -223,14 +249,17 @@ fun SumUpSearchScreen(
         }
 
         if (text.isBlank()) {
-            if (searchFocused && recents.isNotEmpty()) {
-                // ── Recent searches: the items the user opened (Spotify-style),
-                // shown only once the search bar is focused ──
+            val hasRecentQueries = recentQueries.isNotEmpty()
+            val hasRecentItems = recents.isNotEmpty()
+            val showRecents = searchFocused || hasRecentQueries || hasRecentItems
+
+            if (searchFocused && (hasRecentQueries || hasRecentItems)) {
+                // ── Recent searches from Room database & recently opened items ──
                 item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp, 16.dp, 16.dp, 4.dp),
+                            .padding(16.dp, 16.dp, 16.dp, 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
@@ -241,60 +270,90 @@ fun SumUpSearchScreen(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "Clear",
+                            "Clear all",
                             color = Color(0xFFB3B3B3),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) {
-                                com.music.spotui.data.preferences.clearRecentItems(context)
-                                recents = emptyList()
-                            },
+                            modifier = Modifier
+                                .testTag("clear_all_recent_searches_button")
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    searchViewModel.clearAllSearchQueries()
+                                    com.music.spotui.data.preferences.clearRecentItems(context)
+                                    recents = emptyList()
+                                },
                         )
                     }
                 }
-                items(recents.size) { i ->
-                    val item = recents[i]
-                    RecentItemRow(
-                        item = item,
-                        onClick = {
-                            when (item.type) {
-                                "song" -> {
-                                    val songUrl = item.songUrl.ifBlank {
-                                        SongPlayer.buildSpotifyPlayQuery(item.spotifyTrackId, item.name, item.singer)
-                                    }.let { savedUrl ->
-                                        if (
-                                            item.spotifyTrackId.isNotBlank() &&
-                                            !savedUrl.startsWith("spotify:track:")
-                                        ) {
-                                            SongPlayer.buildSpotifyPlayQuery(item.spotifyTrackId, item.name, item.singer)
-                                        } else {
-                                            savedUrl
-                                        }
-                                    }
-                                    val song = SongsModel(
-                                        item.songId, item.name, item.songAlbum, item.singer,
-                                        item.image, songUrl, item.spotifyTrackId,
-                                        explicit = item.explicit,
-                                        durationMs = item.durationMs,
-                                    )
-                                    searchViewModel.startRadioFromSong(song)
-                                    SongPlayer.playSong(song.url, context)
-                                    searchViewModel.updateSongState(
-                                        song.coverUri, song.title, song.singer, true, song.id, 0, song.album)
-                                }
-                                "artist" -> navController.navigate(artistRoute(item.name, item.key.takeIf { it != item.name }.orEmpty()))
-                                "album" -> navController.navigate(albumRoute(item.name, item.singer))
-                                "show" -> navController.navigate(showRoute(item.key, item.name))
+
+                // Display Room database recent queries
+                if (hasRecentQueries) {
+                    items(recentQueries.size) { i ->
+                        val item = recentQueries[i]
+                        RecentSearchQueryRow(
+                            query = item.query,
+                            onClick = {
+                                text = item.query
+                                searchViewModel.saveSearchQuery(item.query)
+                                searchViewModel.search(item.query)
+                            },
+                            onRemove = {
+                                searchViewModel.deleteSearchQuery(item.query)
                             }
-                        },
-                        onRemove = {
-                            com.music.spotui.data.preferences.removeRecentItem(context, item)
-                            recents = com.music.spotui.data.preferences.getRecentItems(context)
-                        },
-                    )
+                        )
+                    }
+                }
+
+                // Display previously opened items beneath recent queries if present
+                if (hasRecentItems) {
+                    if (hasRecentQueries) {
+                        item {
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                    items(recents.size) { i ->
+                        val item = recents[i]
+                        RecentItemRow(
+                            item = item,
+                            onClick = {
+                                when (item.type) {
+                                    "song" -> {
+                                        val songUrl = item.songUrl.ifBlank {
+                                            SongPlayer.buildSpotifyPlayQuery(item.spotifyTrackId, item.name, item.singer)
+                                        }.let { savedUrl ->
+                                            if (
+                                                item.spotifyTrackId.isNotBlank() &&
+                                                !savedUrl.startsWith("spotify:track:")
+                                            ) {
+                                                SongPlayer.buildSpotifyPlayQuery(item.spotifyTrackId, item.name, item.singer)
+                                            } else {
+                                                savedUrl
+                                            }
+                                        }
+                                        val song = SongsModel(
+                                            item.songId, item.name, item.songAlbum, item.singer,
+                                            item.image, songUrl, item.spotifyTrackId,
+                                            explicit = item.explicit,
+                                            durationMs = item.durationMs,
+                                        )
+                                        searchViewModel.startRadioFromSong(song)
+                                        SongPlayer.playSong(song.url, context)
+                                        searchViewModel.updateSongState(
+                                            song.coverUri, song.title, song.singer, true, song.id, 0, song.album)
+                                    }
+                                    "artist" -> navController.navigate(artistRoute(item.name, item.key.takeIf { it != item.name }.orEmpty()))
+                                    "album" -> navController.navigate(albumRoute(item.name, item.singer))
+                                    "show" -> navController.navigate(showRoute(item.key, item.name))
+                                }
+                            },
+                            onRemove = {
+                                com.music.spotui.data.preferences.removeRecentItem(context, item)
+                                recents = com.music.spotui.data.preferences.getRecentItems(context)
+                            },
+                        )
+                    }
                 }
             } else {
                 // ── Spotify-style "Browse all" category grid ──
@@ -312,9 +371,11 @@ fun SumUpSearchScreen(
             items(mixed.size) { i ->
                 when (val row = mixed[i]) {
                     is SearchRow.Song -> SearchSongRow(row.song, searchedList, searchViewModel, onPlayed = {
+                        searchViewModel.saveSearchQuery(row.song.title)
                         recordRecent(row.song.toRecentItem())
                     })
                     is SearchRow.Artist -> SearchArtistRow(row.artist) {
+                        searchViewModel.saveSearchQuery(row.artist.name)
                         recordRecent(com.music.spotui.data.preferences.RecentItem(
                             type = "artist",
                             key = row.artist.id.ifBlank { row.artist.name },
@@ -324,6 +385,7 @@ fun SumUpSearchScreen(
                         navController.navigate(artistRoute(row.artist.name, row.artist.id))
                     }
                     is SearchRow.Album -> SearchAlbumRow(row.album) {
+                        searchViewModel.saveSearchQuery(row.album.name)
                         recordRecent(com.music.spotui.data.preferences.RecentItem(
                             type = "album",
                             key = row.album.name,
@@ -405,6 +467,71 @@ private fun SongsModel.toRecentItem() = com.music.spotui.data.preferences.Recent
     explicit = explicit,
     durationMs = durationMs,
 )
+
+/** A recent search query row stored in the local Room database. */
+@Composable
+fun RecentSearchQueryRow(
+    query: String,
+    onClick: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("recent_search_query_row_$query")
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1E1E24)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_history),
+                    contentDescription = "Recent search query",
+                    tint = Color(0xFFB3B3B3),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = query,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.Close,
+            tint = Color(0xFF888888),
+            modifier = Modifier
+                .testTag("delete_recent_query_$query")
+                .size(28.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onRemove,
+                )
+                .padding(4.dp),
+            contentDescription = "Remove query",
+        )
+    }
+}
 
 /** A recent item row (song/artist/album/show the user opened), with remove (x). */
 @OptIn(ExperimentalGlideComposeApi::class)
@@ -752,17 +879,43 @@ private fun BrowseCategoryTile(
 }
 
 @Composable
-fun SearchTopBar() {
-    Row(horizontalArrangement = Arrangement.Start,
+fun SearchTopBar(isOnline: Boolean = true) {
+    Row(
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(text = "Search", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        //Icon(imageVector = Icons.Default.Person, contentDescription = "", tint = Color.White)
+        if (!isOnline) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xFF331515))
+                    .border(1.dp, Color(0xFFF44336).copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF44336))
+                    )
+                    Text(
+                        text = "Offline Mode",
+                        color = Color(0xFFF44336),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
-
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -771,26 +924,35 @@ fun SearchTopBar() {
 fun SearchStickyBar(
     text: String,
     onFocusChange: (Boolean) -> Unit = {},
+    onClearClick: () -> Unit = {},
+    onSearchAction: () -> Unit = {},
     onTextChange: (String) -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
 
-    Row(verticalAlignment = Alignment.CenterVertically,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .padding(10.dp)
             .clip(RoundedCornerShape(10.dp))
             .height(55.dp)
             .background(Color.White)
-            .padding(10.dp, 0.dp)
-    ){
+            .padding(horizontal = 10.dp)
+    ) {
         Icon(
-            painterResource(id = R.drawable.ic_search_big),
+            painter = painterResource(id = R.drawable.ic_search_big),
             tint = Color.Black,
-            contentDescription = "")
+            contentDescription = "Search icon",
+            modifier = Modifier.size(24.dp)
+        )
 
         TextField(
             enabled = true,
-            modifier = Modifier.onFocusChanged { onFocusChange(it.isFocused) },
+            modifier = Modifier
+                .weight(1f)
+                .testTag("search_input_field")
+                .onFocusChanged { onFocusChange(it.isFocused) },
             value = text,
             textStyle = TextStyle.Default.copy(fontSize = 16.sp, color = Color.Black, fontWeight = FontWeight(500)),
             colors = TextFieldDefaults.colors(
@@ -801,18 +963,38 @@ fun SearchStickyBar(
                 focusedIndicatorColor = Color.Transparent,
                 unfocusedIndicatorColor = Color.Transparent,
                 cursorColor = Color.Black
-
             ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
+                onSearchAction()
+                focusManager.clearFocus()
+            }),
             singleLine = true,
             onValueChange = onTextChange,
             placeholder = {
                 Text(
-                     textAlign = TextAlign.Center,
+                    textAlign = TextAlign.Start,
                     fontWeight = FontWeight.Bold,
-                    text = "What do you want to listen to?"
-
+                    text = "What do you want to listen to?",
+                    color = Color.DarkGray
                 )
             }
         )
+
+        if (text.isNotEmpty()) {
+            IconButton(
+                onClick = onClearClick,
+                modifier = Modifier
+                    .size(36.dp)
+                    .testTag("clear_search_text_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    tint = Color.Black,
+                    contentDescription = "Clear search",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }

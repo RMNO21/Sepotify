@@ -29,10 +29,24 @@ class LibraryViewModel @Inject constructor(private val repository: AppRepository
     private val _isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing
 
+    val isOnline: StateFlow<Boolean> = repository.isOnline
+    val isOffline: StateFlow<Boolean> = repository.isOffline
+
+    private val _isLocalStorageFilter: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isLocalStorageFilter: StateFlow<Boolean> = _isLocalStorageFilter
+
     init {
         load()
         loadAccount()
         loadFollowedArtists()
+    }
+
+    fun setLocalStorageFilter(enabled: Boolean) {
+        _isLocalStorageFilter.value = enabled
+    }
+
+    fun toggleLocalStorageFilter() {
+        _isLocalStorageFilter.value = !_isLocalStorageFilter.value
     }
 
     fun refresh(context: android.content.Context? = null) = viewModelScope.launch(Dispatchers.IO) {

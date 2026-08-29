@@ -26,7 +26,8 @@ object MediaStoreExporter {
         val artist: String,
         val albumName: String,
         val durationMs: Long = 0L,
-        val mimeType: String = "audio/ogg"
+        val mimeType: String = "audio/ogg",
+        val playlistName: String = ""
     )
 
     suspend fun exportTrackToMediaStore(
@@ -35,7 +36,8 @@ object MediaStoreExporter {
         title: String,
         artist: String,
         album: String,
-        mimeType: String = "audio/mp4"
+        mimeType: String = "audio/mp4",
+        playlistName: String = ""
     ): Uri? {
         return insertTrackToMediaStore(
             context = context,
@@ -44,7 +46,8 @@ object MediaStoreExporter {
                 title = title,
                 artist = artist,
                 albumName = album,
-                mimeType = mimeType
+                mimeType = mimeType,
+                playlistName = playlistName
             )
         )
     }
@@ -65,8 +68,15 @@ object MediaStoreExporter {
                 "mp3"
             }
 
-            val displayName = "${metadata.artist} - ${metadata.title}.$extension"
-                .replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+            val sanitizedTitle = metadata.title.replace("[\\\\/:*?\"<>|]".toRegex(), "_").trim().ifBlank { "Track" }
+            val displayName = "$sanitizedTitle.$extension"
+
+            val playlistFolder = metadata.playlistName.replace("[\\\\/:*?\"<>|]".toRegex(), "_").trim()
+            val relativeSubPath = if (playlistFolder.isNotBlank()) {
+                "${Environment.DIRECTORY_MUSIC}/Sepotify/$playlistFolder"
+            } else {
+                "${Environment.DIRECTORY_MUSIC}/Sepotify"
+            }
 
             val values = ContentValues().apply {
                 put(MediaStore.Audio.Media.DISPLAY_NAME, displayName)
@@ -79,7 +89,7 @@ object MediaStoreExporter {
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Sepotify")
+                    put(MediaStore.Audio.Media.RELATIVE_PATH, relativeSubPath)
                     put(MediaStore.Audio.Media.IS_PENDING, 1)
                 }
             }

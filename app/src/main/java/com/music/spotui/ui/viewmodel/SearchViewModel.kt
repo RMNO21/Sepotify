@@ -4,21 +4,29 @@ import androidx.compose.runtime.State
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.music.spotui.data.api.Response
+import com.music.spotui.data.db.entity.RecentSearchQueryEntity
 import com.music.spotui.data.entity.SearchResults
 import com.music.spotui.data.entity.SongsModel
 import com.music.spotui.di.CurrentSongState
 import com.music.spotui.ui.repository.AppRepository
+import com.music.spotui.ui.repository.RecentSearchRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class SearchViewModel @Inject constructor(private val repository: AppRepository, private val currentSongState: CurrentSongState) : ViewModel() {
+class SearchViewModel @Inject constructor(
+    private val repository: AppRepository,
+    private val currentSongState: CurrentSongState,
+    private val recentSearchRepository: RecentSearchRepository
+) : ViewModel() {
 
     private val _songs : MutableStateFlow<Response<List<SongsModel>>> = MutableStateFlow(Response.Loading())
     val songs : StateFlow<Response<List<SongsModel>>> = _songs
@@ -26,9 +34,37 @@ class SearchViewModel @Inject constructor(private val repository: AppRepository,
     private val _results : MutableStateFlow<Response<SearchResults>> = MutableStateFlow(Response.Success(SearchResults()))
     val results : StateFlow<Response<SearchResults>> = _results
 
+    val recentSearchQueries: StateFlow<List<RecentSearchQueryEntity>> = recentSearchRepository.recentQueries
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val isOnline: StateFlow<Boolean> = repository.isOnline
+    val isOffline: StateFlow<Boolean> = repository.isOffline
+
     val likeState = currentSongState.likeState
 
     val currentSongId: State<Int> get() = currentSongState.songId
+
+    fun saveSearchQuery(query: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            recentSearchRepository.saveQuery(query)
+        }
+    }
+
+    fun deleteSearchQuery(query: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            recentSearchRepository.deleteQuery(query)
+        }
+    }
+
+    fun clearAllSearchQueries() {
+        viewModelScope.launch(Dispatchers.IO) {
+            recentSearchRepository.clearAll()
+        }
+    }
 
 
     fun updateLikeState(likeState : Boolean){
@@ -86,6 +122,9 @@ class SearchViewModel @Inject constructor(private val repository: AppRepository,
         _songs.value = Response.Loading()
         searchJob = viewModelScope.launch(Dispatchers.IO) {
             delay(300) // 300ms debounced search pipeline
+            if (query.trim().isNotBlank()) {
+                recentSearchRepository.saveQuery(query.trim())
+            }
             repository.searchEverything(query).collect { result ->
                 if (result is Response.Error && context != null) {
                     val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)

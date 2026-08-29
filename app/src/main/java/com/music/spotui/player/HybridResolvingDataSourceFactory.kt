@@ -28,7 +28,19 @@ class HybridResolvingDataSourceFactory(
     private val context: Context,
     private val trackResolver: TrackResolver = TrackResolver(),
     private val localFileManager: LocalFileManager = LocalFileManager.getInstance(context),
-    upstreamFactory: DataSource.Factory = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
+    upstreamFactory: DataSource.Factory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+        .setKeepPostFor302Redirects(true)
+        .setConnectTimeoutMs(15000)
+        .setReadTimeoutMs(20000)
+        .setUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+        .setDefaultRequestProperties(
+            mapOf(
+                "Accept" to "*/*",
+                "Accept-Encoding" to "identity",
+                "Connection" to "keep-alive",
+            )
+        )
 ) : DataSource.Factory {
 
     private val resolvingFactory = ResolvingDataSource.Factory(

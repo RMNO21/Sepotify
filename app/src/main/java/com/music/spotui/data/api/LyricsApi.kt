@@ -70,11 +70,22 @@ object LyricsApi {
         prefetchScope.launch { runCatching { fetch(title, artist, album, durationSec) } }
     }
 
+    fun clearCache(title: String, artist: String) {
+        cache.remove(cacheKey(title, artist))
+    }
+
     suspend fun fetch(title: String, artist: String, album: String, durationSec: Int): Lyrics? {
         val key = cacheKey(title, artist)
         when (val cached = cache[key]) {
             is Lyrics -> return cached
             is Miss -> if (System.currentTimeMillis() - cached.at < MISS_RETRY_MS) return null
+        }
+
+        // 0) First check local disk for downloaded companion .lrc file
+        val fromLocal = fromLocalDisk(title, artist)
+        if (fromLocal != null && fromLocal.lines.isNotEmpty()) {
+            cache[key] = fromLocal
+            return fromLocal
         }
 
         val primaryArtist = artist.substringBefore(",").trim()
@@ -101,6 +112,7 @@ object LyricsApi {
                     ?: combined.await()?.takeIf { it.synced }
             }
             ?: fromLyrist(cleaned, primaryArtist)?.takeIf { it.synced }
+            ?: fromNetEase(cleaned, primaryArtist)?.takeIf { it.synced }
 
         if (syncedLyrics != null) {
             cache[key] = syncedLyrics
@@ -115,12 +127,46 @@ object LyricsApi {
             ?: searchTitleOnly(cleaned, primaryArtist, durationSec)
             ?: searchCombined("$cleaned $primaryArtist", durationSec)
             ?: fromLyrist(cleaned, primaryArtist)
+            ?: fromNetEase(cleaned, primaryArtist)
             ?: fromOvh(cleaned, primaryArtist)
             ?: fromChartLyrics(cleaned, primaryArtist)
 
         cache[key] = plainLyrics ?: Miss()
         return plainLyrics
     }
+
+    private fun fromLocalDisk(title: String, artist: String): Lyrics? = runCatching {
+        val app = com.music.spotui.MyApplication.instance
+        val path = com.music.spotui.data.preferences.downloadedPathForQuery(app, "$title $artist")
+            ?: com.music.spotui.data.preferences.downloadedPathForQuery(app, title)
+        if (path != null) {
+            val audioFile = java.io.File(path)
+            val lrcFile = java.io.File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
+            if (lrcFile.exists()) {
+                val lines = parseLrc(lrcFile.readText(Charsets.UTF_8))
+                if (lines.isNotEmpty()) return Lyrics(lines, synced = true)
+            }
+        }
+        null
+    }.getOrNull()
+
+    private fun fromNetEase(title: String, artist: String): Lyrics? = runCatching {
+        val searchUrl = "https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${enc("$title $artist")}&type=1&offset=0&total=true&limit=1"
+        val searchBody = httpGet(searchUrl) ?: return@runCatching null
+        val searchJson = JSONObject(searchBody)
+        val songId = searchJson.optJSONObject("result")?.optJSONArray("songs")?.optJSONObject(0)?.optLong("id") ?: return@runCatching null
+        if (songId <= 0) return@runCatching null
+
+        val lyricUrl = "https://music.163.com/api/song/lyric?os=pc&id=$songId&lv=-1&kv=-1&tv=-1"
+        val lyricBody = httpGet(lyricUrl) ?: return@runCatching null
+        val lyricJson = JSONObject(lyricBody)
+        val lrcContent = lyricJson.optJSONObject("lrc")?.optString("lyric")
+        if (!lrcContent.isNullOrBlank()) {
+            val lines = parseLrc(lrcContent)
+            if (lines.isNotEmpty()) return Lyrics(lines, synced = true)
+        }
+        null
+    }.getOrNull()
 
     private fun fromOvh(title: String, artist: String): Lyrics? {
         val url = "https://api.lyrics.ovh/v1/${enc(artist)}/${enc(title)}"

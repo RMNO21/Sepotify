@@ -27,6 +27,12 @@ class MyApplication : Application(){
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // Pre-create WebView cache directories so Chromium index enumerator does not error on cold start
+        runCatching {
+            java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
+            java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm").mkdirs()
+        }
+
         // Surface Spotify REST/GQL logs to logcat for diagnosis.
         com.metrolist.spotify.Spotify.logger = { level, msg ->
             android.util.Log.d("SpotifyREST", "[$level] $msg")

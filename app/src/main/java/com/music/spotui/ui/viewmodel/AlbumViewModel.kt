@@ -29,6 +29,9 @@ class AlbumViewModel @Inject constructor(private val repository: AppRepository, 
     private val _albums : MutableStateFlow<Response<List<AlbumsModel>>> = MutableStateFlow(Response.Loading())
     val albums : StateFlow<Response<List<AlbumsModel>>> = _albums
 
+    val isOnline: StateFlow<Boolean> = repository.isOnline
+    val isOffline: StateFlow<Boolean> = repository.isOffline
+
     val queue: State<List<SongsModel>> get() = currentSongState.queue
 
     fun updateQueue(songs: List<SongsModel>) = currentSongState.updateQueue(songs)

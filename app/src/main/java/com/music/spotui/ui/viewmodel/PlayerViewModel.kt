@@ -43,6 +43,9 @@ class PlayerViewModel @Inject constructor(private val currentSongState: CurrentS
     val likeStateFlow: StateFlow<Boolean> get() = currentSongState.likeStateFlow
     val queueFlow: StateFlow<List<SongsModel>> get() = currentSongState.queueFlow
 
+    val isOnline: StateFlow<Boolean> get() = repository.isOnline
+    val isOffline: StateFlow<Boolean> get() = repository.isOffline
+
     fun updateQueue(songs: List<SongsModel>) = currentSongState.updateQueue(songs)
 
     /** Insert a track right after the one currently playing ("Play next"). */

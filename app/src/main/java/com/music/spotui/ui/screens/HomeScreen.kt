@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -174,6 +175,9 @@ private fun HomeHeaderRow(navController: NavController) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         com.music.spotui.data.api.ProfileCache.ensure(context)
     }
+    val homeViewModel: HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val isOnline by homeViewModel.isOnline.collectAsState()
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -239,6 +243,35 @@ private fun HomeHeaderRow(navController: NavController) {
                         color = if (isSel) Color.Black else Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
+
+        if (!isOnline) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 16.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xFF331515))
+                    .border(1.dp, Color(0xFFF44336).copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF44336))
+                    )
+                    Text(
+                        text = "Offline",
+                        color = Color(0xFFF44336),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -772,15 +805,27 @@ fun OfflineHomeScreen(navController: NavController) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(Color(0xFF222228))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .background(Color(0xFF331515))
+                            .border(1.dp, Color(0xFFF44336).copy(alpha = 0.6f), RoundedCornerShape(50))
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
                     ) {
-                        Text(
-                            text = "Offline",
-                            color = AppPalette,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF44336))
+                            )
+                            Text(
+                                text = "Offline Mode",
+                                color = Color(0xFFF44336),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))

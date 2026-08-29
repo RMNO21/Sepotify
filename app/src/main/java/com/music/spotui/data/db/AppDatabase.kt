@@ -7,10 +7,12 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.music.spotui.data.db.dao.PlaylistDao
 import com.music.spotui.data.db.dao.PlaylistTrackDao
+import com.music.spotui.data.db.dao.RecentSearchQueryDao
 import com.music.spotui.data.db.dao.TrackDao
 import com.music.spotui.data.db.dao.TrackMappingDao
 import com.music.spotui.data.db.entity.PlaylistEntity
 import com.music.spotui.data.db.entity.PlaylistTrackCrossRef
+import com.music.spotui.data.db.entity.RecentSearchQueryEntity
 import com.music.spotui.data.db.entity.TrackEntity
 import com.music.spotui.data.db.entity.TrackMappingEntity
 
@@ -19,9 +21,10 @@ import com.music.spotui.data.db.entity.TrackMappingEntity
         TrackEntity::class,
         PlaylistEntity::class,
         PlaylistTrackCrossRef::class,
-        TrackMappingEntity::class
+        TrackMappingEntity::class,
+        RecentSearchQueryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -30,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun playlistTrackDao(): PlaylistTrackDao
     abstract fun trackMappingDao(): TrackMappingDao
+    abstract fun recentSearchQueryDao(): RecentSearchQueryDao
 
     companion object {
         @Volatile

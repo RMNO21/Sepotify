@@ -30,6 +30,7 @@ private const val KEY_CROSSFADE_DJ = "crossfade_dj_mode"
 private const val KEY_WEB_PLAYBACK = "web_playback_enabled"
 private const val KEY_VIDEO_FALLBACK = "video_fallback_enabled"
 private const val KEY_LIBRARY_GRID = "library_grid_view"
+private const val KEY_LOCAL_STORAGE_ONLY = "local_storage_only_filter"
 
 /** Off (0s) … 12s. 0 disables crossfade. */
 const val CROSSFADE_MIN_MS = 0
@@ -56,6 +57,10 @@ fun setDownloadQuality(c: Context, q: StreamQuality) = writeQ(c, KEY_DL_Q, q)
 /** Library layout: false = rows (default), true = Spotify-style 3-column grid. */
 fun isLibraryGridView(c: Context): Boolean = prefs(c).getBoolean(KEY_LIBRARY_GRID, false)
 fun setLibraryGridView(c: Context, v: Boolean) = prefs(c).edit().putBoolean(KEY_LIBRARY_GRID, v).apply()
+
+/** Local storage filter: when enabled or offline, shows only downloaded and device tracks in Library. */
+fun isLocalStorageOnly(c: Context): Boolean = prefs(c).getBoolean(KEY_LOCAL_STORAGE_ONLY, false)
+fun setLocalStorageOnly(c: Context, v: Boolean) = prefs(c).edit().putBoolean(KEY_LOCAL_STORAGE_ONLY, v).apply()
 
 fun isPreloadEnabled(c: Context): Boolean = prefs(c).getBoolean(KEY_PRELOAD, true)
 fun setPreloadEnabled(c: Context, v: Boolean) = prefs(c).edit().putBoolean(KEY_PRELOAD, v).apply()

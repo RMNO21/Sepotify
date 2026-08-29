@@ -269,6 +269,12 @@ object SongPlayer {
         streamCache.remove(song)
         sourceCache.remove(song)
         qualityCache.remove(song)
+        com.music.spotui.player.StreamUrlCache.remove(song)
+        val trackKey = if (song.startsWith(SPOTIFY_TRACK_PREFIX)) song.removePrefix(SPOTIFY_TRACK_PREFIX).substringBefore('|') else song
+        com.music.spotui.player.StreamUrlCache.remove(trackKey)
+        activeResolvedVideoId.remove(song)?.let { videoId ->
+            YTPlayerUtils.forceRefreshForVideo(videoId)
+        }
     }
 
     private var reconnectAttempt = 0
@@ -314,10 +320,14 @@ object SongPlayer {
             if (currentRequest != song) return@launch
             withContext(Dispatchers.Main) {
                 ensurePlayer(context.applicationContext)
-                player?.setMediaItem(buildMediaItem(newUrl, streamMimeType(newUrl)))
-                player?.prepare()
-                if (pos > 0) player?.seekTo(pos)
-                player?.playWhenReady = true
+                val p = player ?: return@withContext
+                p.stop()
+                p.clearMediaItems()
+                _playbackStatus.value = PlaybackStatus.Buffering(currentSource, currentQuality)
+                p.setMediaItem(buildMediaItem(newUrl, streamMimeType(newUrl)))
+                p.prepare()
+                if (pos > 0) p.seekTo(pos)
+                p.playWhenReady = true
             }
         }
     }
@@ -424,11 +434,7 @@ object SongPlayer {
                 }
                 // A newer tap superseded this one while we were resolving — drop it.
                 if (currentRequest != song) return@launch
-                val effectivePlaybackUrl = if (streamUrl.startsWith("http://") || streamUrl.startsWith("https://")) {
-                    com.music.spotui.player.LocalMediaProxyServer.getProxyUrl(streamUrl, song)
-                } else {
-                    streamUrl
-                }
+                val effectivePlaybackUrl = streamUrl
                 withContext(Dispatchers.Main) {
                     if (currentRequest != song) return@withContext
                     ensurePlayer(appContext)
@@ -682,6 +688,13 @@ object SongPlayer {
             .setUserAgent(
                 "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            )
+            .setDefaultRequestProperties(
+                mapOf(
+                    "Accept" to "*/*",
+                    "Accept-Encoding" to "identity",
+                    "Connection" to "keep-alive",
+                )
             )
         val upstream = androidx.media3.datasource.DefaultDataSource.Factory(context, okHttpDataSourceFactory)
         return androidx.media3.datasource.cache.CacheDataSource.Factory()
@@ -961,11 +974,17 @@ object SongPlayer {
      * retried chunk resumes from the current byte position. Returns true iff the whole
      * file was written. Falls back gracefully if the server ignores Range (HTTP 200).
      */
-    private fun httpDownloadRanged(url: String, tmpFile: java.io.File, query: String): Boolean {
+    private fun httpDownloadRanged(
+        url: String,
+        tmpFile: java.io.File,
+        query: String,
+        onProgress: ((Int) -> Unit)? = null
+    ): Boolean {
         val chunk = 8L * 1024 * 1024 // 8 MB
         var total = -1L
         var position = 0L
         downloadProgress[query] = 0
+        onProgress?.invoke(0)
         try {
             java.io.BufferedOutputStream(tmpFile.outputStream()).use { output ->
                 outer@ while (true) {
@@ -980,7 +999,7 @@ object SongPlayer {
                             val code = conn.responseCode
                             if (code !in 200..299 && code != 416) {
                                 if (position == 0L) {
-                                    return directDownloadStream(url, tmpFile, query)
+                                    return directDownloadStream(url, tmpFile, query, onProgress)
                                 }
                                 lastDownloadError = "Stream returned HTTP $code"
                                 return false
@@ -1005,6 +1024,7 @@ object SongPlayer {
                                         val pct = ((position * 100) / total).toInt().coerceIn(0, 100)
                                         if (downloadProgress[query] != pct) {
                                             downloadProgress[query] = pct
+                                            onProgress?.invoke(pct)
                                             onDownloadsChanged?.invoke()
                                         }
                                     }
@@ -1015,7 +1035,7 @@ object SongPlayer {
                             Log.w(TAG, "chunk @${position} failed (attempt $attempt): ${e.message}")
                             if (attempt >= 4) {
                                 if (position == 0L) {
-                                    return directDownloadStream(url, tmpFile, query)
+                                    return directDownloadStream(url, tmpFile, query, onProgress)
                                 }
                                 lastDownloadError = e.message ?: "Connection reset"
                                 return false
@@ -1031,6 +1051,7 @@ object SongPlayer {
                 }
             }
             downloadProgress[query] = 100
+            onProgress?.invoke(100)
             return total <= 0 || position >= total
         } catch (e: Exception) {
             lastDownloadError = e.message ?: "Download error"
@@ -1038,7 +1059,12 @@ object SongPlayer {
         }
     }
 
-    private fun directDownloadStream(url: String, tmpFile: java.io.File, query: String): Boolean {
+    private fun directDownloadStream(
+        url: String,
+        tmpFile: java.io.File,
+        query: String,
+        onProgress: ((Int) -> Unit)? = null
+    ): Boolean {
         return try {
             val conn = openDownloadConn(url)
             val total = conn.contentLengthLong
@@ -1055,6 +1081,7 @@ object SongPlayer {
                             val pct = ((position * 100) / total).toInt().coerceIn(0, 100)
                             if (downloadProgress[query] != pct) {
                                 downloadProgress[query] = pct
+                                onProgress?.invoke(pct)
                                 onDownloadsChanged?.invoke()
                             }
                         }
@@ -1062,9 +1089,11 @@ object SongPlayer {
                 }
             }
             downloadProgress[query] = 100
+            onProgress?.invoke(100)
             conn.disconnect()
             true
         } catch (e: Exception) {
+            lastDownloadError = e.message ?: "Direct download error"
             Log.e(TAG, "directDownloadStream failed: ${e.message}")
             false
         }
@@ -1214,7 +1243,8 @@ object SongPlayer {
         playlistId: String = "",
         playlistName: String = "",
         isAlbum: Boolean = false,
-    ): Boolean = downloadSongInternal(song, appContext, playlistId, playlistName, isAlbum)
+        onProgress: ((Int) -> Unit)? = null,
+    ): Boolean = downloadSongInternal(song, appContext, playlistId, playlistName, isAlbum, onProgress)
 
     private suspend fun downloadSongInternal(
         song: com.music.spotui.data.entity.SongsModel,
@@ -1222,6 +1252,7 @@ object SongPlayer {
         playlistId: String = "",
         playlistName: String = "",
         isAlbum: Boolean = false,
+        onProgress: ((Int) -> Unit)? = null,
     ): Boolean = downloadSemaphore.withPermit {
         val query = song.url
         if (query.isBlank() || com.music.spotui.data.preferences.isDownloaded(appContext, song.id.toString())) {
@@ -1232,12 +1263,13 @@ object SongPlayer {
         }
         downloadingSongs[query] = song
         downloadProgress[query] = 0
+        onProgress?.invoke(0)
         onDownloadsChanged?.invoke()
         lastDownloadError = null
         try {
             var ok = false
             for (attempt in 1..2) {
-                ok = runCatching { downloadToFile(song, appContext, playlistId, playlistName, isAlbum) }
+                ok = runCatching { downloadToFile(song, appContext, playlistId, playlistName, isAlbum, onProgress) }
                     .onFailure { lastDownloadError = it.message ?: "Download error" }
                     .getOrDefault(false)
                 if (ok) break
@@ -1258,6 +1290,7 @@ object SongPlayer {
         playlistId: String = "",
         playlistName: String = "",
         isAlbum: Boolean = false,
+        onProgress: ((Int) -> Unit)? = null,
     ): Boolean {
         // Enforce storage quota limits (reject or LRU evict if needed)
         try {
@@ -1285,7 +1318,7 @@ object SongPlayer {
             }
             if (raw != null) {
                 if (raw.isFlac) {
-                    if (downloadDeezerRaw(song, appContext, raw, playlistId, playlistName, isAlbum)) return true
+                    if (downloadDeezerRaw(song, appContext, raw, playlistId, playlistName, isAlbum, onProgress)) return true
                 } else {
                     heldDeezer = raw
                 }
@@ -1299,8 +1332,8 @@ object SongPlayer {
             if (r is com.music.spotui.lossless.LosslessSource.Result.Success) {
                 val baseKey = song.spotifyTrackId.ifBlank { song.id.toString() }
                 val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, baseKey, "flac.tmp")
-                val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "flac")
-                if (httpDownloadRanged(r.track.url, tmpFile, song.url) &&
+                val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "flac", playlistName = playlistName, trackTitle = song.title)
+                if (httpDownloadRanged(r.track.url, tmpFile, song.url, onProgress) &&
                     com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
                     com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
                     com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
@@ -1311,7 +1344,7 @@ object SongPlayer {
             }
         }
         // Deezer MP3 fallback (held above) before dropping to a YouTube m4a.
-        heldDeezer?.let { if (downloadDeezerRaw(song, appContext, it, playlistId, playlistName, isAlbum)) return true }
+        heldDeezer?.let { if (downloadDeezerRaw(song, appContext, it, playlistId, playlistName, isAlbum, onProgress)) return true }
 
         // Saavn Direct 320kbps / 160kbps CDN download
         val saavnRes = kotlinx.coroutines.withTimeoutOrNull(6_000) {
@@ -1324,8 +1357,8 @@ object SongPlayer {
         }
         if (saavnRes is com.music.spotui.saavn.SaavnSource.Result.Success) {
             val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "m4a.tmp")
-            val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "m4a")
-            if (httpDownloadRanged(saavnRes.track.url, tmpFile, song.url) &&
+            val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "m4a", playlistName = playlistName, trackTitle = song.title)
+            if (httpDownloadRanged(saavnRes.track.url, tmpFile, song.url, onProgress) &&
                 com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
                 com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
                 com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
@@ -1382,9 +1415,9 @@ object SongPlayer {
         val isOpus = playback.format.mimeType.contains("opus", ignoreCase = true) || playback.format.mimeType.contains("webm", ignoreCase = true)
         val ext = if (isOpus) "opus" else "m4a"
         val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "$ext.tmp")
-        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext)
+        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = song.title)
 
-        if (!httpDownloadRanged(playback.streamUrl, tmpFile, song.url)) {
+        if (!httpDownloadRanged(playback.streamUrl, tmpFile, song.url, onProgress)) {
             runCatching { tmpFile.delete() }
             com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadFailed(appContext, song, "Network stream failed", playlistId)
             return false
@@ -1416,7 +1449,8 @@ object SongPlayer {
                 title = song.title,
                 artist = song.singer,
                 album = song.album,
-                mimeType = if (isOpus) "audio/ogg" else "audio/mp4"
+                mimeType = if (isOpus) "audio/ogg" else "audio/mp4",
+                playlistName = playlistName
             )
         }
         return true
@@ -1429,11 +1463,12 @@ object SongPlayer {
         playlistId: String = "",
         playlistName: String = "",
         isAlbum: Boolean = false,
+        onProgress: ((Int) -> Unit)? = null,
     ): Boolean {
         val ext = if (raw.isFlac) "flac" else "mp3"
         val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "$ext.tmp")
-        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext)
-        if (!deezerDownloadDecrypted(raw.url, raw.encrypted, raw.trackId, tmpFile, song.url)) {
+        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = song.title)
+        if (!deezerDownloadDecrypted(raw.url, raw.encrypted, raw.trackId, tmpFile, song.url, onProgress)) {
             runCatching { tmpFile.delete() }
             com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadFailed(appContext, song, "Deezer decryption error", playlistId)
             return false
@@ -1461,8 +1496,10 @@ object SongPlayer {
         trackId: String,
         tmpFile: java.io.File,
         query: String,
+        onProgress: ((Int) -> Unit)? = null,
     ): Boolean {
         downloadProgress[query] = 0
+        onProgress?.invoke(0)
         val conn = openDownloadConn(url)
         return try {
             val code = conn.responseCode
@@ -1503,6 +1540,7 @@ object SongPlayer {
                             val pct = ((position * 100) / total).toInt().coerceIn(0, 100)
                             if (downloadProgress[query] != pct) {
                                 downloadProgress[query] = pct
+                                onProgress?.invoke(pct)
                                 onDownloadsChanged?.invoke()
                             }
                         }
@@ -1511,6 +1549,7 @@ object SongPlayer {
                 }
             }
             downloadProgress[query] = 100
+            onProgress?.invoke(100)
             true
         } catch (e: Exception) {
             lastDownloadError = e.message ?: "Deezer download error"
@@ -2115,7 +2154,7 @@ object SongPlayer {
                     // Routes deezer:// URIs to the decrypting DeezerDataSource and
                     // everything else through the normal cached HTTP stack.
                     com.music.spotui.deezer.DeezerAwareDataSourceFactory(cacheDataSourceFactory(context)),
-                ),
+                ).setDrmSessionManagerProvider { androidx.media3.exoplayer.drm.DrmSessionManager.DRM_UNSUPPORTED },
             )
             .setLoadControl(loadControl)
             .setRenderersFactory(renderers)
@@ -2195,12 +2234,13 @@ object SongPlayer {
                         } else if (currentSource.startsWith("Saavn")) {
                             Log.w(TAG, "Saavn playback error for $song — blacklisting Saavn for this track")
                             failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
-                        } else if (currentSource.startsWith("YouTube")) {
+                        } else if (currentSource.contains("YouTube") || currentSource.contains("Piped")) {
                             activeResolvedVideoId[song]?.let { badVid ->
-                                Log.w(TAG, "YouTube playback error for $song (videoId=$badVid) — blacklisting candidate")
+                                Log.w(TAG, "YouTube/Piped playback error for $song (videoId=$badVid) — blacklisting candidate")
                                 failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
                             }
                         }
+                        invalidateResolvedStream(song)
                     }
                     currentQuality = ""
                     val isNetwork = error.errorCode in listOf(
@@ -2537,11 +2577,7 @@ object SongPlayer {
                     val (sp, sf) = createPlayerWithFilter(ctx, handleAudioFocus = false)
                     secondaryPlayer = sp
                     secondaryPlayerFilter = sf
-                    val effectiveNextUrl = if (nextUrl.startsWith("http://") || nextUrl.startsWith("https://")) {
-                        com.music.spotui.player.LocalMediaProxyServer.getProxyUrl(nextUrl, nextSong.url)
-                    } else {
-                        nextUrl
-                    }
+                    val effectiveNextUrl = nextUrl
                     sp.setMediaItem(buildMediaItem(effectiveNextUrl, streamMimeType(nextUrl)))
                     sp.prepare()
                     sp.volume = 0f

@@ -489,6 +489,7 @@ object YTPlayerUtils {
                 .get()
                 .addHeader("User-Agent", YouTubeClient.USER_AGENT_WEB)
                 .addHeader("Accept", "*/*")
+                .addHeader("Accept-Encoding", "identity")
                 .addHeader("Connection", "keep-alive")
                 .addHeader("Range", "bytes=0-1023")
                 .url(url)

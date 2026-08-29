@@ -7,6 +7,8 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import com.music.spotui.data.db.AppDatabase
+import com.music.spotui.data.db.dao.RecentSearchQueryDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -18,6 +20,18 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 class AppModule {
+
+    @Provides
+    @Singleton
+    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
+        return AppDatabase.getInstance(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideRecentSearchQueryDao(database: AppDatabase): RecentSearchQueryDao {
+        return database.recentSearchQueryDao()
+    }
 
     @Provides
     @Singleton

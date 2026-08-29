@@ -1,6 +1,7 @@
 package com.music.spotui.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -45,6 +46,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -94,7 +97,9 @@ import com.music.spotui.data.preferences.getDownloadedSongsForPlaylist
 import com.music.spotui.data.preferences.getLocalSongs
 import com.music.spotui.data.preferences.getSavedPlaylists
 import com.music.spotui.data.preferences.isLibraryGridView
+import com.music.spotui.data.preferences.isLocalStorageOnly
 import com.music.spotui.data.preferences.setLibraryGridView
+import com.music.spotui.data.preferences.setLocalStorageOnly
 import com.music.spotui.di.SongPlayer
 import com.music.spotui.ui.components.Snackbar
 import com.music.spotui.ui.components.SongOptionsSheet
@@ -125,7 +130,9 @@ fun LibraryScreen(navController: NavController) {
     val isRefreshing by libraryViewModel.isRefreshing.collectAsState()
     val context = LocalContext.current
 
-    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
+    val isOnline by libraryViewModel.isOnline.collectAsState()
+    var localStorageOnly by remember { mutableStateOf(isLocalStorageOnly(context)) }
+    val isLocalStorageActive = !isOnline || localStorageOnly
     var showAccount by remember { mutableStateOf(false) }
     var gridView by remember { mutableStateOf(isLibraryGridView(context)) }
     var selectedFilter by remember(isOnline) { mutableStateOf(if (isOnline) "All" else "Downloaded") }
@@ -290,6 +297,34 @@ fun LibraryScreen(navController: NavController) {
                     fontSize = 22.sp,
                     modifier = Modifier.weight(1f),
                 )
+                if (!isOnline) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0xFF331515))
+                            .border(1.dp, Color(0xFFF44336).copy(alpha = 0.6f), RoundedCornerShape(50))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF44336))
+                            )
+                            Text(
+                                text = "Offline",
+                                color = Color(0xFFF44336),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
                 IconButton(onClick = { isSearching = true }) {
                     Icon(Icons.Default.Search, contentDescription = "Search library", tint = Color.White, modifier = Modifier.size(22.dp))
                 }
@@ -311,6 +346,79 @@ fun LibraryScreen(navController: NavController) {
                     } else {
                         Icon(Icons.Default.Person, contentDescription = "Account", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
+                }
+            }
+        }
+
+        // ConnectivityManager Offline Mode & Local Storage Banner
+        if (!isOnline) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF1E1416))
+                    .border(1.dp, Color(0xFFF44336).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF381515))
+                    ) {
+                        Icon(
+                            imageVector = ImageVector.vectorResource(R.drawable.ic_download),
+                            contentDescription = null,
+                            tint = Color(0xFFF44336),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF44336))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Offline Mode (ConnectivityManager)",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = "Showing only downloaded tracks in local storage",
+                            color = Color(0xFFD48B8B),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Normal
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = isLocalStorageActive,
+                        onCheckedChange = {
+                            localStorageOnly = it
+                            setLocalStorageOnly(context, it)
+                            libraryViewModel.setLocalStorageFilter(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = AppPalette,
+                            uncheckedThumbColor = Color.LightGray,
+                            uncheckedTrackColor = Color(0xFF33333F)
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
                 }
             }
         }
@@ -344,15 +452,49 @@ fun LibraryScreen(navController: NavController) {
             }
         }
 
-        // Grid/list switch (only in normal browsing mode)
+        // Local storage toggle & Grid/list switch row
         if (!isSearching || searchQuery.isBlank()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp, 0.dp, 16.dp, 4.dp)
+                    .padding(16.dp, 4.dp, 16.dp, 6.dp)
             ) {
+                // Interactive Local Storage Filter chip / toggle
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (isLocalStorageActive) AppPalette.copy(alpha = 0.2f) else Color(0xFF1E1E24))
+                        .border(
+                            1.dp,
+                            if (isLocalStorageActive) AppPalette else Color(0xFF33333E),
+                            RoundedCornerShape(20.dp)
+                        )
+                        .clickable {
+                            localStorageOnly = !localStorageOnly
+                            setLocalStorageOnly(context, localStorageOnly)
+                            libraryViewModel.setLocalStorageFilter(localStorageOnly)
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Icon(
+                        imageVector = ImageVector.vectorResource(R.drawable.ic_download),
+                        contentDescription = null,
+                        tint = if (isLocalStorageActive) AppPalette else Color.Gray,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isLocalStorageActive) "Local Storage: On" else "Local Storage Only",
+                        color = if (isLocalStorageActive) AppPalette else Color.LightGray,
+                        fontSize = 11.sp,
+                        fontWeight = if (isLocalStorageActive) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+
                 Spacer(modifier = Modifier.weight(1f))
+
                 Icon(
                     painter = painterResource(if (gridView) R.drawable.ic_view_list else R.drawable.ic_view_grid),
                     contentDescription = if (gridView) "Show as list" else "Show as grid",
@@ -385,24 +527,37 @@ fun LibraryScreen(navController: NavController) {
             return@Column
         }
 
-        // Filter calculation
+        // Filter calculation taking into account local storage mode
         val filteredEntries = when (selectedFilter) {
             "Downloaded" -> allEntries.filter {
                 it.spotifyId == Api.HomeCache.DOWNLOADS_ID ||
                 it.subtitle.contains("Downloaded", ignoreCase = true) ||
                 getDownloadedSongsForPlaylist(context, it.spotifyId).isNotEmpty()
             }
-            "Playlists" -> allEntries.filter { it.isPlaylist }
-            "Albums" -> allEntries.filter {
-                !it.isPlaylist && it.spotifyId != Api.HomeCache.DOWNLOADS_ID && it.spotifyId != Api.HomeCache.LIKED_SONGS_ID
+            "Playlists" -> allEntries.filter { entry ->
+                entry.isPlaylist && (!isLocalStorageActive || entry.spotifyId == Api.HomeCache.DOWNLOADS_ID || getDownloadedSongsForPlaylist(context, entry.spotifyId).isNotEmpty() || entry.subtitle.contains("Downloaded", ignoreCase = true))
+            }
+            "Albums" -> allEntries.filter { entry ->
+                !entry.isPlaylist && entry.spotifyId != Api.HomeCache.DOWNLOADS_ID && entry.spotifyId != Api.HomeCache.LIKED_SONGS_ID &&
+                (!isLocalStorageActive || entry.subtitle.contains("Downloaded", ignoreCase = true) || getDownloadedSongsForPlaylist(context, entry.spotifyId).isNotEmpty())
             }
             "Artists" -> emptyList() // Handled via artistsToShow
-            else -> allEntries
+            else -> {
+                if (isLocalStorageActive) {
+                    allEntries.filter { entry ->
+                        entry.spotifyId == Api.HomeCache.DOWNLOADS_ID ||
+                        entry.subtitle.contains("Downloaded", ignoreCase = true) ||
+                        getDownloadedSongsForPlaylist(context, entry.spotifyId).isNotEmpty()
+                    }
+                } else {
+                    allEntries
+                }
+            }
         }
 
         val artistsToShow = when (selectedFilter) {
             "Artists" -> followedArtists
-            "All" -> followedArtists
+            "All" -> if (isLocalStorageActive) emptyList() else followedArtists
             else -> emptyList()
         }
 
@@ -416,8 +571,10 @@ fun LibraryScreen(navController: NavController) {
                     entries = filteredEntries,
                     followedArtists = artistsToShow,
                     selectedFilter = selectedFilter,
+                    isLocalStorageActive = isLocalStorageActive,
                     navController = navController,
-                    onCreatePlaylist = { showCreatePlaylistDialog = true }
+                    onCreatePlaylist = { showCreatePlaylistDialog = true },
+                    onSongMenu = { menuSong = it }
                 )
             } else {
                 SumUpLibraryScreen(
@@ -425,8 +582,10 @@ fun LibraryScreen(navController: NavController) {
                     entries = filteredEntries,
                     followedArtists = artistsToShow,
                     selectedFilter = selectedFilter,
+                    isLocalStorageActive = isLocalStorageActive,
                     navController = navController,
-                    onCreatePlaylist = { showCreatePlaylistDialog = true }
+                    onCreatePlaylist = { showCreatePlaylistDialog = true },
+                    onSongMenu = { menuSong = it }
                 )
             }
         }
@@ -709,14 +868,69 @@ fun SumUpLibraryScreen(
     entries: List<LibraryEntry>,
     followedArtists: List<ArtistsModel>,
     selectedFilter: String,
+    isLocalStorageActive: Boolean = false,
     navController: NavController,
-    onCreatePlaylist: () -> Unit
+    onCreatePlaylist: () -> Unit,
+    onSongMenu: (SongsModel) -> Unit = {},
+    playlistViewModel: PlaylistViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val batchDownloads by SongPlayer.batchDownloads.collectAsState()
+    val downloadedSongs = remember(entries) { getDownloadedSongs(context) }
 
-    if (entries.isEmpty() && followedArtists.isEmpty() && selectedFilter != "Playlists") {
-        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items found in this section") }
+    if (entries.isEmpty() && followedArtists.isEmpty() && (!isLocalStorageActive || downloadedSongs.isEmpty()) && selectedFilter != "Playlists") {
+        if (isLocalStorageActive) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF1E1E28))
+                    ) {
+                        Icon(
+                            imageVector = ImageVector.vectorResource(R.drawable.ic_download),
+                            contentDescription = null,
+                            tint = AppPalette,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No Downloaded Tracks",
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "When offline, only music saved to local storage is displayed.",
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { navController.navigate(Routes.LocalFiles.route) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette)
+                    ) {
+                        Text("Import Local Files", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items found in this section") }
+        }
         return
     }
 
@@ -727,35 +941,16 @@ fun SumUpLibraryScreen(
             .padding(padding)
             .background(Color(0xFF0B0B0F))
     ) {
-        // Quick items (History & Local files) only show when filter is "All"
-        if (selectedFilter == "All") {
-            // Listening history & stats entry
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp, 6.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { navController.navigate(Routes.History.route) }
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(55.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF27856A)),
-                    ) {
-                        Icon(Icons.Default.DateRange, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-                    }
-                    Column(modifier = Modifier.padding(start = 12.dp)) {
-                        Text(text = "Listening history", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        Text(text = "Your plays and stats", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
+        // Download Queue section showing active downloads with WorkManager progress bars
+        item {
+            com.music.spotui.ui.components.DownloadQueueSection(
+                navController = navController,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+        }
+
+        // Quick items (History & Local files) show when filter is "All" or when in local storage mode
+        if (selectedFilter == "All" || isLocalStorageActive) {
             // Local files (imported device audio) entry
             item {
                 Row(
@@ -788,10 +983,40 @@ fun SumUpLibraryScreen(
                     }
                 }
             }
+
+            if (!isLocalStorageActive) {
+                // Listening history & stats entry
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp, 6.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { navController.navigate(Routes.History.route) }
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(55.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF27856A)),
+                        ) {
+                            Icon(Icons.Default.DateRange, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
+                        }
+                        Column(modifier = Modifier.padding(start = 12.dp)) {
+                            Text(text = "Listening history", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(text = "Your plays and stats", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+            }
         }
 
         // In Playlists filter: Show "+ Add new playlist" tile at top
-        if (selectedFilter == "Playlists" || selectedFilter == "All") {
+        if ((selectedFilter == "Playlists" || selectedFilter == "All") && !isLocalStorageActive) {
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -815,6 +1040,94 @@ fun SumUpLibraryScreen(
                     Column(modifier = Modifier.padding(start = 12.dp)) {
                         Text(text = "Create playlist", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                         Text(text = "Build your custom playlist", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+
+        // Direct Downloaded Tracks list in Local Storage mode or Downloaded filter
+        if ((isLocalStorageActive || selectedFilter == "Downloaded") && downloadedSongs.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = ImageVector.vectorResource(R.drawable.ic_download),
+                        contentDescription = null,
+                        tint = AppPalette,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Downloaded Tracks (${downloadedSongs.size})",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            items(downloadedSongs) { song ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .clickable {
+                            val idx = downloadedSongs.indexOf(song).coerceAtLeast(0)
+                            playlistViewModel.updateQueue(downloadedSongs)
+                            SongPlayer.playSong(song.url, context)
+                            playlistViewModel.updateSongState(
+                                song.coverUri,
+                                song.title,
+                                song.singer,
+                                true,
+                                song.id,
+                                idx,
+                                "Downloaded"
+                            )
+                        }
+                ) {
+                    GlideImage(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        model = song.coverUri,
+                        failure = placeholder(R.drawable.placeholder),
+                        contentScale = ContentScale.Crop,
+                        contentDescription = "Song cover"
+                    )
+                    Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
+                        Text(
+                            text = song.title,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = song.singer + (if (song.album.isNotBlank()) " • ${song.album}" else ""),
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Downloaded",
+                        tint = AppPalette,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    IconButton(
+                        onClick = { onSongMenu(song) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More", tint = Color.Gray, modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -884,14 +1197,31 @@ fun SumUpLibraryScreen(
                             )
                         }
                     }
+                    val activeBatch = batchDownloads[entry.spotifyId]
+                        ?: batchDownloads.values.find { it.playlistName.equals(entry.name, ignoreCase = true) }
+                    val isBatchDownloading = activeBatch != null && activeBatch.isDownloading
+
                     Text(
-                        text = entry.subtitle,
-                        color = Color.Gray,
+                        text = if (isBatchDownloading) "Downloading ${activeBatch?.completedTracks}/${activeBatch?.totalTracks} (${activeBatch?.progressPercent}%)" else entry.subtitle,
+                        color = if (isBatchDownloading) AppPalette else Color.Gray,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+
+                    if (isBatchDownloading && activeBatch != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { (activeBatch.progressPercent.coerceIn(0, 100)) / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth(0.9f)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(1.5.dp)),
+                            color = AppPalette,
+                            trackColor = Color(0xFF2E2E3A)
+                        )
+                    }
                 }
 
                 // Download Whole Playlist button in library
@@ -997,12 +1327,64 @@ fun LibraryGridScreen(
     entries: List<LibraryEntry>,
     followedArtists: List<ArtistsModel>,
     selectedFilter: String,
+    isLocalStorageActive: Boolean = false,
     navController: NavController,
-    onCreatePlaylist: () -> Unit
+    onCreatePlaylist: () -> Unit,
+    onSongMenu: (SongsModel) -> Unit = {}
 ) {
     val context = LocalContext.current
     if (entries.isEmpty() && followedArtists.isEmpty() && selectedFilter != "Playlists") {
-        Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items in this section") }
+        if (isLocalStorageActive) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF1E1E28))
+                    ) {
+                        Icon(
+                            imageVector = ImageVector.vectorResource(R.drawable.ic_download),
+                            contentDescription = null,
+                            tint = AppPalette,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No Downloaded Tracks",
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "When offline, only music saved to local storage is displayed.",
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { navController.navigate(Routes.LocalFiles.route) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette)
+                    ) {
+                        Text("Import Local Files", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            Box(modifier = Modifier.padding(20.dp, 40.dp)) { Snackbar(showMessage = "No items in this section") }
+        }
         return
     }
     LazyVerticalGrid(
@@ -1015,8 +1397,16 @@ fun LibraryGridScreen(
             .padding(padding)
             .background(Color(0xFF0B0B0F))
     ) {
-        // Quick history entry only when filter is "All"
-        if (selectedFilter == "All") {
+        // Download Queue section spanning the full grid width
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            com.music.spotui.ui.components.DownloadQueueSection(
+                navController = navController,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+        }
+
+        // Quick history entry only when filter is "All" and not in local storage only mode
+        if (selectedFilter == "All" && !isLocalStorageActive) {
             item {
                 Column(
                     modifier = Modifier.clickable(
@@ -1041,8 +1431,39 @@ fun LibraryGridScreen(
             }
         }
 
-        // Create Playlist card when in Playlists filter or All
-        if (selectedFilter == "Playlists" || selectedFilter == "All") {
+        // Local files entry in grid
+        if (selectedFilter == "All" || isLocalStorageActive) {
+            item {
+                Column(
+                    modifier = Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { navController.navigate(Routes.LocalFiles.route) }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF3B5BA5)),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_library_big),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = "Local files", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(text = "Imported device audio", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+
+        // Create Playlist card when in Playlists filter or All (and not offline)
+        if ((selectedFilter == "Playlists" || selectedFilter == "All") && !isLocalStorageActive) {
             item {
                 Column(
                     modifier = Modifier.clickable(
@@ -1235,7 +1656,7 @@ private fun AccountSheet(
             if (isSpotifyLoggedIn) {
                 AccountRow("Log out of Spotify", tint = Color(0xFFE57373)) {
                     SpotifySession.setSpDc(context, "")
-                    SpotifySession.setGuestMode(context, true)
+                    SpotifySession.setGuestMode(context, false)
                     Api.HomeCache.clear()
                     onDismiss()
                     navController.navigate(Routes.Login.route) {

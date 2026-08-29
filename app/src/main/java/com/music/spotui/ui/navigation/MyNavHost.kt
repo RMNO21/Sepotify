@@ -39,7 +39,6 @@ import com.music.spotui.ui.screens.SearchScreen
 import com.music.spotui.ui.screens.SettingsScreen
 import com.music.spotui.ui.viewmodel.PlayerViewModel
 
-@RequiresApi(Build.VERSION_CODES.S)
 @Composable
 fun MyNavHost(
     navHostController: NavHostController,

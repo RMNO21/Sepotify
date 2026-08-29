@@ -600,10 +600,13 @@ fun SettingsScreen(navController: NavController) {
                         .clip(RoundedCornerShape(10.dp))
                         .clickable {
                             com.music.spotui.data.api.SpotifySession.setSpDc(context, "")
-                            com.music.spotui.data.api.SpotifySession.setGuestMode(context, true)
+                            com.music.spotui.data.api.SpotifySession.setGuestMode(context, false)
                             com.music.spotui.data.api.Api.HomeCache.clear()
                             spotifySessionKey = ""
                             android.widget.Toast.makeText(context, "Logged out of Spotify", android.widget.Toast.LENGTH_SHORT).show()
+                            navController.navigate(com.music.spotui.ui.navigation.Routes.Login.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
                         }
                         .padding(vertical = 12.dp),
                 )

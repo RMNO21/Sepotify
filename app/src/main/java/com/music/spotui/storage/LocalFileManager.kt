@@ -73,9 +73,14 @@ class LocalFileManager(
     private val storageDir: File = run {
         val external = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         val dir = if (external != null) {
-            File(external, "sepotify_tracks")
+            File(external, "Sepotify")
         } else {
-            File(context.filesDir, "downloads")
+            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            if (publicDir != null && publicDir.exists()) {
+                File(publicDir, "Sepotify")
+            } else {
+                File(context.filesDir, "downloads")
+            }
         }
         if (!dir.exists()) dir.mkdirs()
         dir
@@ -85,10 +90,48 @@ class LocalFileManager(
 
     private fun getFileForTrack(trackId: String, extension: String = "mp3"): File {
         val cleanId = trackId.replace(Regex("[^a-zA-Z0-9_.-]"), "_")
-        val primary = File(storageDir, "$cleanId.$extension")
+        val targetName = "$cleanId.$extension"
+
+        // 0. Check if track local_path in DB points to a valid file
+        try {
+            val db = AppDatabase.getInstance(context)
+            val dbPath = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                db.trackDao().getTrack(trackId)?.localPath
+            }
+            if (!dbPath.isNullOrBlank()) {
+                val dbFile = File(dbPath)
+                if (dbFile.exists() && dbFile.length() >= MIN_AUDIO_FILE_SIZE_BYTES) {
+                    return dbFile
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 1. Direct in storageDir
+        val primary = File(storageDir, targetName)
         if (primary.exists() && primary.length() >= MIN_AUDIO_FILE_SIZE_BYTES) return primary
-        val legacy = File(legacyDir, "$cleanId.$extension")
+
+        // 2. Direct in legacyDir
+        val legacy = File(legacyDir, targetName)
         if (legacy.exists() && legacy.length() >= MIN_AUDIO_FILE_SIZE_BYTES) return legacy
+
+        // 3. In any playlist/album subdirectory under storageDir
+        storageDir.listFiles()?.filter { it.isDirectory }?.forEach { subDir ->
+            val subFile = File(subDir, targetName)
+            if (subFile.exists() && subFile.length() >= MIN_AUDIO_FILE_SIZE_BYTES) return subFile
+            subDir.listFiles()?.forEach { file ->
+                if (file.isFile && file.length() >= MIN_AUDIO_FILE_SIZE_BYTES &&
+                    (file.name.contains(cleanId, ignoreCase = true) || file.nameWithoutExtension.equals(cleanId, ignoreCase = true))) {
+                    return file
+                }
+            }
+        }
+
+        // 4. In any playlist/album subdirectory under legacyDir
+        legacyDir.listFiles()?.filter { it.isDirectory }?.forEach { subDir ->
+            val subFile = File(subDir, targetName)
+            if (subFile.exists() && subFile.length() >= MIN_AUDIO_FILE_SIZE_BYTES) return subFile
+        }
+
         return primary
     }
 

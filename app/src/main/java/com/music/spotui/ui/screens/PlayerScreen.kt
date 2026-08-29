@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +48,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -104,14 +107,21 @@ import com.bumptech.glide.integration.compose.GlideImage
 import com.music.spotui.R
 import com.music.spotui.data.api.Response
 import com.music.spotui.data.entity.SongsModel
+import com.music.spotui.data.preferences.CROSSFADE_MAX_MS
+import com.music.spotui.data.preferences.CROSSFADE_MIN_MS
 import com.music.spotui.data.preferences.addLikedSongId
 import com.music.spotui.data.preferences.alternativeStreamKey
 import com.music.spotui.data.preferences.clearAlternativeStream
 import com.music.spotui.data.preferences.getAlternativeStream
+import com.music.spotui.data.preferences.getCrossfadeMs
 import com.music.spotui.data.preferences.getLikedSongIds
 import com.music.spotui.data.preferences.getSongsByIds
+import com.music.spotui.data.preferences.isCrossfadeDjMode
+import com.music.spotui.data.preferences.isCrossfadeEnabled
 import com.music.spotui.data.preferences.isSongLiked
 import com.music.spotui.data.preferences.removeLikedSongId
+import com.music.spotui.data.preferences.setCrossfadeDjMode
+import com.music.spotui.data.preferences.setCrossfadeMs
 import com.music.spotui.data.preferences.setLocalAlternativeStream
 import com.music.spotui.data.preferences.setYouTubeAlternativeStream
 import com.music.spotui.di.Palette
@@ -258,7 +268,7 @@ fun PlayerScreen(navController: NavController) {
     }
 
     val songsResponse by playerViewModel.songs.collectAsState()
-    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
+    val isOnline by playerViewModel.isOnline.collectAsState()
     val shuffle = playerViewModel.shuffleState.value
     val repeat = playerViewModel.repeatState.value
 
@@ -1041,23 +1051,34 @@ fun CustomSlider(
 
 @Composable
 fun PlayerEndInfo() {
-    Row(verticalAlignment = Alignment.CenterVertically,
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(20.dp)){
+            .padding(20.dp)
+    ) {
         Icon(
             modifier = Modifier
-                .size(22.dp),
+                .size(22.dp)
+                .clickable {
+                    if (!isOnline) {
+                        android.widget.Toast.makeText(context, "Remote playback is disabled while offline", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
             painter = painterResource(id = R.drawable.ic_devices),
-            tint = Color.White,
-            contentDescription = "")
+            tint = if (isOnline) Color.White else Color.Gray.copy(alpha = 0.4f),
+            contentDescription = if (isOnline) "Connect to a device" else "Remote playback disabled (Offline)"
+        )
         Icon(
             modifier = Modifier
                 .size(16.dp),
             painter = painterResource(id = R.drawable.ic_share),
             tint = Color.White,
-            contentDescription = "")
+            contentDescription = "Share"
+        )
     }
 }
 
@@ -1236,7 +1257,11 @@ fun PlayerConnectRow(
     context: Context,
     currentTrack: SongsModel?,
 ) {
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
     val routeName = remember(currentTrack?.id) { currentAudioRoute(context) }
+    val deviceColor = if (isOnline) Color(0xFF1ED760) else Color(0xFF8E8E93)
+    val displayRoute = if (isOnline) routeName else "Offline • Local device only"
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1244,17 +1269,28 @@ fun PlayerConnectRow(
             .fillMaxWidth()
             .padding(horizontal = 25.dp, vertical = 4.dp),
     ) {
-        // Device / Spotify Connect indicator (green, like the official app).
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Device / Spotify Connect indicator (green when online, muted gray when offline).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable {
+                if (!isOnline) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Remote playback and device casting are unavailable offline",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        ) {
             Icon(
                 painter = painterResource(id = R.drawable.ic_devices),
-                tint = Color(0xFF1ED760),
+                tint = deviceColor,
                 modifier = Modifier.size(18.dp),
-                contentDescription = "Device",
+                contentDescription = if (isOnline) "Device" else "Remote playback disabled",
             )
             Text(
-                text = routeName,
-                color = Color(0xFF1ED760),
+                text = displayRoute,
+                color = deviceColor,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -1315,6 +1351,8 @@ fun PlayerOptionsSheet(
     var showSleep by remember { mutableStateOf(false) }
     var showSavedIn by remember { mutableStateOf(false) }
     var showAlternativeStream by remember { mutableStateOf(false) }
+    var showCrossfade by remember { mutableStateOf(false) }
+    var crossfadeMsState by remember { mutableStateOf(getCrossfadeMs(context)) }
 
     val title = playerViewModel.currentSongTitle.value
     val singer = playerViewModel.currentSongSinger.value
@@ -1395,6 +1433,14 @@ fun PlayerOptionsSheet(
                         currentAlternative = null
                         Toast.makeText(context, "Alternative stream cleared", Toast.LENGTH_SHORT).show()
                     },
+                )
+            } else if (showCrossfade) {
+                CrossfadeEditor(
+                    context = context,
+                    onBack = {
+                        crossfadeMsState = getCrossfadeMs(context)
+                        showCrossfade = false
+                    }
                 )
             } else if (!showSleep) {
                 // ── Now-playing header ──
@@ -1519,6 +1565,12 @@ fun PlayerOptionsSheet(
                     }
                 }
                 PlayerMenuRow(
+                    icon = ImageVector.vectorResource(R.drawable.ic_crossfade),
+                    iconTint = if (crossfadeMsState > 0) Color(AppPalette.toArgb()) else Color.White,
+                    label = if (crossfadeMsState > 0) "Crossfade (${crossfadeMsState / 1000}s)" else "Crossfade (Off)",
+                    trailingArrow = true
+                ) { showCrossfade = true }
+                PlayerMenuRow(
                     icon = Icons.Default.Notifications,
                     label = "Sleep timer",
                     trailingArrow = true
@@ -1628,6 +1680,210 @@ fun AlternativeStreamEditor(
             iconTint = Color(0xFFE57373),
         ) {
             onClear()
+        }
+    }
+}
+
+@Composable
+fun CrossfadeEditor(
+    context: Context,
+    onBack: () -> Unit
+) {
+    var crossfadeMs by remember { mutableStateOf(getCrossfadeMs(context).toFloat()) }
+    var isDjMode by remember { mutableStateOf(isCrossfadeDjMode(context)) }
+    val isEnabled = crossfadeMs > 0f
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(24.dp)
+                    .clickable { onBack() },
+                contentDescription = "Back",
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Crossfade",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.weight(1f))
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = { enable ->
+                    val newMs = if (enable) 5000f else 0f
+                    crossfadeMs = newMs
+                    setCrossfadeMs(context, newMs.toInt())
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Black,
+                    checkedTrackColor = AppPalette,
+                    uncheckedThumbColor = Color.LightGray,
+                    uncheckedTrackColor = Color(0xFF33333F)
+                ),
+                modifier = Modifier.height(24.dp)
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text(
+            text = "Allows smooth transitions by blending the end of one track into the start of the next.",
+            color = Color(0xFFB3B3B3),
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        // Duration Label & Value
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Transition Duration",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (crossfadeMs <= 0f) "Off" else "${(crossfadeMs / 1000f).toInt()}s",
+                color = if (crossfadeMs <= 0f) Color(0xFFB3B3B3) else AppPalette,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Slider(
+            value = crossfadeMs,
+            onValueChange = {
+                crossfadeMs = it
+                setCrossfadeMs(context, crossfadeMs.toInt())
+            },
+            valueRange = 0f..CROSSFADE_MAX_MS.toFloat(),
+            steps = (CROSSFADE_MAX_MS / 1000) - 1, // 1-second steps
+            colors = SliderDefaults.colors(
+                thumbColor = AppPalette,
+                activeTrackColor = AppPalette,
+                inactiveTrackColor = Color(0xFF333333),
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("0s (Off)", color = Color.Gray, fontSize = 11.sp)
+            Text("6s", color = Color.Gray, fontSize = 11.sp)
+            Text("12s", color = Color.Gray, fontSize = 11.sp)
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Preset Duration Chips
+        Text(
+            text = "Quick Presets",
+            color = Color.LightGray,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val presets = listOf(
+                "Off" to 0f,
+                "3s" to 3000f,
+                "5s" to 5000f,
+                "8s" to 8000f,
+                "12s" to 12000f
+            )
+            presets.forEach { (label, ms) ->
+                val isSelected = (crossfadeMs.toInt() / 1000) == (ms.toInt() / 1000)
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSelected) AppPalette.copy(alpha = 0.2f) else Color(0xFF24242C))
+                        .border(
+                            1.dp,
+                            if (isSelected) AppPalette else Color(0xFF383842),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickable {
+                            crossfadeMs = ms
+                            setCrossfadeMs(context, ms.toInt())
+                        }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSelected) AppPalette else Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        androidx.compose.material3.HorizontalDivider(color = Color(0xFF2A2A2A))
+        Spacer(Modifier.height(14.dp))
+
+        // DJ Mode Toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    val newMode = !isDjMode
+                    isDjMode = newMode
+                    setCrossfadeDjMode(context, newMode)
+                },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "DJ Filter Sweep",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Applies real-time low/high-pass EQ sweeps during the blend",
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+            }
+            Switch(
+                checked = isDjMode,
+                onCheckedChange = {
+                    isDjMode = it
+                    setCrossfadeDjMode(context, it)
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Black,
+                    checkedTrackColor = AppPalette,
+                    uncheckedThumbColor = Color.LightGray,
+                    uncheckedTrackColor = Color(0xFF33333F)
+                ),
+                modifier = Modifier.height(24.dp)
+            )
         }
     }
 }

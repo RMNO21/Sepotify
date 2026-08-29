@@ -130,13 +130,24 @@ private fun ArtistOverviewContent(
         )
     }
 
+    val isOnline by com.music.spotui.data.network.NetworkMonitor.isOnline.collectAsState()
+
     fun playTrackAt(index: Int) {
         if (index !in tracks.indices) return
         val songs = tracks.map { it.song }
+        val target = songs[index]
+        val isDownloaded = com.music.spotui.data.preferences.isSongDownloaded(context, target)
+        if (!isOnline && !isDownloaded) {
+            android.widget.Toast.makeText(
+                context,
+                "Track not downloaded • Offline mode active",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         artistViewModel.updateQueue(songs)
-        val s = songs[index]
-        SongPlayer.playSong(s.url, context)
-        artistViewModel.updateSongState(s.coverUri, s.title, s.singer, true, s.id, index)
+        SongPlayer.playSong(target.url, context)
+        artistViewModel.updateSongState(target.coverUri, target.title, target.singer, true, target.id, index)
     }
 
     LazyColumn(
@@ -145,6 +156,33 @@ private fun ArtistOverviewContent(
             .fillMaxSize()
             .background(Color(AppBackground.toArgb()))
     ) {
+        // Offline Status Indicator Banner
+        if (!isOnline) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFB71C1C))
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Offline Mode • Only downloaded tracks can be played",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
         // ── Header: big artist image with scrim + name ──
         item {
             Box(modifier = Modifier

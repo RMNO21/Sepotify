@@ -9,7 +9,20 @@ data class CachedStream(
     val timestampMs: Long = System.currentTimeMillis(),
     val ttlMs: Long = 4 * 60 * 60 * 1000L // 4 hours TTL
 ) {
-    val isExpired: Boolean get() = System.currentTimeMillis() - timestampMs > ttlMs
+    val isExpired: Boolean
+        get() {
+            if (System.currentTimeMillis() - timestampMs > ttlMs) return true
+            // Check if YouTube expire timestamp is within 60 seconds
+            val expireParam = url.substringAfter("expire=", "").substringBefore('&')
+            if (expireParam.isNotBlank()) {
+                val expireSec = expireParam.toLongOrNull()
+                if (expireSec != null) {
+                    val nowSec = System.currentTimeMillis() / 1000
+                    if (nowSec >= expireSec - 60) return true
+                }
+            }
+            return false
+        }
 }
 
 /**

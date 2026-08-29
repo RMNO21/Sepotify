@@ -1,6 +1,7 @@
 package com.music.spotui.data.storage
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import com.music.spotui.data.db.AppDatabase
 import com.music.spotui.data.db.entity.DownloadStatus
@@ -25,7 +26,17 @@ object OfflineStorageManager {
     const val DEFAULT_QUOTA_BYTES: Long = 10L * 1024L * 1024L * 1024L
 
     fun getDownloadsDir(context: Context): File {
-        val dir = File(context.filesDir, "downloads")
+        val external = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+        val dir = if (external != null) {
+            File(external, "Sepotify")
+        } else {
+            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            if (publicDir != null && publicDir.exists()) {
+                File(publicDir, "Sepotify")
+            } else {
+                File(context.filesDir, "downloads")
+            }
+        }
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -117,17 +128,40 @@ object OfflineStorageManager {
 
     // ── Atomic File Operations ──
 
+    fun sanitizeFolderName(name: String): String {
+        val clean = name.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(Regex("\\s+"), " ")
+        return clean.ifBlank { "Tracks" }
+    }
+
+    fun sanitizeFileName(name: String): String {
+        val clean = name.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_").replace(Regex("\\s+"), " ")
+        return clean.ifBlank { "Track" }
+    }
+
     fun createTempFile(context: Context, trackKey: String, extension: String = "tmp"): File {
         val safeKey = trackKey.replace(Regex("[^A-Za-z0-9_]"), "_").take(32)
         val dir = getDownloadsDir(context)
         return File(dir, "temp_${safeKey}_${System.currentTimeMillis()}.$extension")
     }
 
-    fun getFinalFile(context: Context, trackKey: String, extension: String): File {
-        val safeKey = trackKey.replace(Regex("[^A-Za-z0-9_]"), "_").take(48)
+    fun getFinalFile(
+        context: Context,
+        trackKey: String,
+        extension: String,
+        playlistName: String = "",
+        trackTitle: String = ""
+    ): File {
         val ext = extension.removePrefix(".")
-        val dir = getDownloadsDir(context)
-        return File(dir, "${safeKey}.$ext")
+        val baseDir = getDownloadsDir(context)
+        val targetPlaylist = if (playlistName.isNotBlank()) sanitizeFolderName(playlistName) else "Tracks"
+        val playlistDir = File(baseDir, targetPlaylist).apply { mkdirs() }
+        val fileName = if (trackTitle.isNotBlank()) {
+            "${sanitizeFileName(trackTitle)}.$ext"
+        } else {
+            val safeKey = trackKey.replace(Regex("[^A-Za-z0-9_]"), "_").take(48)
+            "${safeKey}.$ext"
+        }
+        return File(playlistDir, fileName)
     }
 
     /**

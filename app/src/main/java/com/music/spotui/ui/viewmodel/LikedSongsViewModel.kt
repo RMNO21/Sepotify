@@ -23,6 +23,9 @@ class LikedSongsViewModel @Inject constructor(
     private val _songs = MutableStateFlow<Response<List<SongsModel>>>(Response.Loading())
     val songs: StateFlow<Response<List<SongsModel>>> = _songs
 
+    val isOnline: StateFlow<Boolean> = repository.isOnline
+    val isOffline: StateFlow<Boolean> = repository.isOffline
+
     val currentSongPlayingState: State<Boolean> get() = currentSongState.playingState
     val currentSongId: State<Int> get() = currentSongState.songId
 

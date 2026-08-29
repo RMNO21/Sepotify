@@ -17,7 +17,6 @@ import com.music.spotui.ui.navigation.MyNavHost
 import com.music.spotui.ui.navigation.Routes
 
 
-@RequiresApi(Build.VERSION_CODES.S)
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
 @Composable
 fun App() {
