@@ -84,7 +84,7 @@ fun DeezerIntroScreen(navController: NavController) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Spotui streams your music from Deezer. Skip this and playback falls back to YouTube instead — slower to load, and some tracks come back censored or as a different edit.",
+                "Sepotify streams your music from Deezer. Skip this and playback falls back to YouTube instead — slower to load, and some tracks come back censored or as a different edit.",
                 color = Color(0xFFB3B3B3),
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,

@@ -4,10 +4,13 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,11 +33,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -45,15 +50,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,13 +70,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
+import com.music.spotui.R
 import com.music.spotui.data.preferences.getDeezerArl
 import com.music.spotui.data.preferences.getDeezerTier
 import com.music.spotui.data.preferences.setDeezerArl
@@ -80,17 +90,19 @@ import com.music.spotui.deezer.DeezerSession
 import com.music.spotui.ui.navigation.Routes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val DEEZER_LOGIN_URL = "https://www.deezer.com/login"
 private const val DEEZER_PURPLE = 0xFFA238FF
+private const val CHROME_MOBILE_UA =
+    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
 /**
- * Native Deezer Login Screen.
- * Provides explicit input boxes for the Deezer ARL token with clipboard paste support,
- * tier detection (FLAC / 320 / 128), and optional in-app web login sheet.
+ * Native Deezer Login Screen for Sepotify.
+ * Provides explicit input boxes for user credentials (Email & Password), direct Web login, and ARL token input.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,6 +110,10 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+
+    var deezerEmail by remember { mutableStateOf("") }
+    var deezerPassword by remember { mutableStateOf("") }
+    var isPasswordVisible by remember { mutableStateOf(false) }
 
     var arlInput by remember { mutableStateOf(getDeezerArl(context) ?: "") }
     var isProcessing by remember { mutableStateOf(false) }
@@ -107,11 +123,13 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
     var currentTier by remember { mutableStateOf(getDeezerTier(context)) }
     var showGuide by remember { mutableStateOf(false) }
 
-    // Web view sheet state
-    var showWebSheet by remember { mutableStateOf(false) }
+    // Mode: 0 = User/Pass & ARL Form, 1 = Direct Web View
+    var loginMode by remember { mutableIntStateOf(0) }
+
+    // Web view state
     var webViewLoading by remember { mutableStateOf(true) }
     var webViewProgress by remember { mutableFloatStateOf(0.1f) }
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var deezerWebViewRef by remember { mutableStateOf<WebView?>(null) }
     val captured = remember { AtomicBoolean(false) }
 
     fun pasteFromClipboard() {
@@ -144,13 +162,13 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
     fun executeDeezerAuth(cleanArl: String) {
         if (cleanArl.isBlank()) {
             hasError = true
-            statusMessage = "Please enter your Deezer ARL token."
+            statusMessage = "Please enter your Deezer credentials or ARL token."
             return
         }
 
         isProcessing = true
         hasError = false
-        statusMessage = "Authenticating with Deezer…"
+        statusMessage = "Authenticating with Deezer HiFi…"
 
         scope.launch(Dispatchers.IO) {
             setDeezerArl(context, cleanArl)
@@ -175,6 +193,22 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
         }
     }
 
+    // Direct background cookie polling while on Deezer screen
+    LaunchedEffect(Unit) {
+        while (isActive && !isConnected) {
+            delay(1200)
+            val cookieManager = CookieManager.getInstance()
+            val arl = extractDeezerCookie(cookieManager, "arl")
+            if (!arl.isNullOrBlank() && captured.compareAndSet(false, true)) {
+                arlInput = arl
+                withContext(Dispatchers.Main) {
+                    executeDeezerAuth(arl)
+                }
+                break
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -187,7 +221,7 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 .navigationBarsPadding()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Top Navigation Bar
@@ -195,17 +229,15 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (navController.previousBackStackEntry != null) {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.testTag("deezer_login_back_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White,
-                        )
-                    }
+                IconButton(
+                    onClick = { navController.popBackStack() },
+                    modifier = Modifier.testTag("deezer_login_back_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White,
+                    )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
@@ -216,49 +248,85 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Branding & Info Card
+            // Lossless Audio Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF191325)),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(Color(DEEZER_PURPLE).copy(alpha = 0.25f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("🎧", fontSize = 22.sp)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(DEEZER_PURPLE).copy(alpha = 0.25f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("🎧", fontSize = 18.sp)
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Deezer Lossless Audio",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "1411kbps Studio FLAC Quality",
+                                    color = Color(DEEZER_PURPLE),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Lossless FLAC Streaming",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                text = "1411kbps Studio Master Quality",
-                                color = Color(DEEZER_PURPLE),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
+
+                        // Mode switcher
+                        Row(
+                            modifier = Modifier
+                                .background(Color(0xFF261D36), RoundedCornerShape(20.dp))
+                                .padding(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(if (loginMode == 0) Color(DEEZER_PURPLE) else Color.Transparent)
+                                    .clickable { loginMode = 0 }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Credentials",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(if (loginMode == 1) Color(DEEZER_PURPLE) else Color.Transparent)
+                                    .clickable { loginMode = 1 }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Web Portal",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Deezer provides direct, uncensored audio streams. Enter your Deezer ARL token below to connect your account.",
-                        color = Color(0xFFB8B0C8),
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                    )
 
                     if (isConnected && currentTier.isNotBlank()) {
                         Spacer(modifier = Modifier.height(10.dp))
@@ -281,171 +349,396 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // ARL Token Input Field
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF151020)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Text(
-                        text = "Deezer ARL Token",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = arlInput,
-                        onValueChange = { arlInput = it },
-                        placeholder = { Text("Paste your 'arl' cookie string…", color = Color(0xFF666677), fontSize = 13.sp) },
-                        singleLine = false,
-                        maxLines = 4,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("deezer_arl_input_screen"),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(DEEZER_PURPLE),
-                            unfocusedBorderColor = Color(0xFF382A4A),
-                            focusedContainerColor = Color(0xFF0F0B17),
-                            unfocusedContainerColor = Color(0xFF0F0B17),
-                        ),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (arlInput.isNotBlank()) {
-                                    IconButton(
-                                        onClick = { arlInput = "" },
-                                        modifier = Modifier.size(28.dp),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Clear",
-                                            tint = Color.Gray,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    }
-                                }
-                                TextButton(
-                                    onClick = { pasteFromClipboard() },
-                                    modifier = Modifier.testTag("paste_deezer_arl_btn"),
-                                ) {
-                                    Text("Paste", color = Color(DEEZER_PURPLE), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            focusManager.clearFocus()
-                            executeDeezerAuth(arlInput.trim())
-                        })
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // How to find ARL guide expander
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showGuide = !showGuide }
-                            .padding(vertical = 4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Info",
-                            tint = Color(0xFF9988AA),
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+            // MODE 0: Credentials & ARL Token Form
+            if (loginMode == 0) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF151020)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = if (showGuide) "Hide token guide" else "How to obtain your Deezer ARL token",
-                            color = Color(0xFF9988AA),
-                            fontSize = 12.sp,
+                            text = "Deezer User & Password",
+                            color = Color(DEEZER_PURPLE),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                         )
-                    }
-
-                    if (showGuide) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        Box(
+
+                        OutlinedTextField(
+                            value = deezerEmail,
+                            onValueChange = { deezerEmail = it },
+                            placeholder = { Text("Deezer Email or Username", color = Color(0xFF666677), fontSize = 13.sp) },
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Default.Person, contentDescription = "Email", tint = Color.Gray, modifier = Modifier.size(18.dp))
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF0F0A18), RoundedCornerShape(8.dp))
-                                .padding(12.dp)
+                                .testTag("deezer_email_field"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(DEEZER_PURPLE),
+                                unfocusedBorderColor = Color(0xFF382A4A),
+                                focusedContainerColor = Color(0xFF0F0B17),
+                                unfocusedContainerColor = Color(0xFF0F0B17),
+                            ),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        OutlinedTextField(
+                            value = deezerPassword,
+                            onValueChange = { deezerPassword = it },
+                            placeholder = { Text("Deezer Password", color = Color(0xFF666677), fontSize = 13.sp) },
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Default.Lock, contentDescription = "Password", tint = Color.Gray, modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                    Icon(
+                                        painter = painterResource(
+                                            id = if (isPasswordVisible) R.drawable.visibility else R.drawable.visibility_off
+                                        ),
+                                        contentDescription = "Toggle password",
+                                        tint = Color.Gray,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("deezer_password_field"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(DEEZER_PURPLE),
+                                unfocusedBorderColor = Color(0xFF382A4A),
+                                focusedContainerColor = Color(0xFF0F0B17),
+                                unfocusedContainerColor = Color(0xFF0F0B17),
+                            ),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                focusManager.clearFocus()
+                                if (deezerEmail.isNotBlank() && deezerPassword.isNotBlank()) {
+                                    loginMode = 1
+                                    deezerWebViewRef?.evaluateJavascript(
+                                        """
+                                        (function() {
+                                            var m = document.querySelector('input#mail_login, input[type="email"]');
+                                            var p = document.querySelector('input#password_login, input[type="password"]');
+                                            if (m) { m.value = '${deezerEmail.replace("'", "\\'")}'; m.dispatchEvent(new Event('input', {bubbles: true})); }
+                                            if (p) { p.value = '${deezerPassword.replace("'", "\\'")}'; p.dispatchEvent(new Event('input', {bubbles: true})); }
+                                            var btn = document.querySelector('button#login_form_submit, button[type="submit"]');
+                                            if (btn) btn.click();
+                                        })();
+                                        """.trimIndent(),
+                                        null
+                                    )
+                                }
+                            })
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = {
+                                focusManager.clearFocus()
+                                if (deezerEmail.isNotBlank() && deezerPassword.isNotBlank()) {
+                                    loginMode = 1
+                                    deezerWebViewRef?.evaluateJavascript(
+                                        """
+                                        (function() {
+                                            var m = document.querySelector('input#mail_login, input[type="email"]');
+                                            var p = document.querySelector('input#password_login, input[type="password"]');
+                                            if (m) { m.value = '${deezerEmail.replace("'", "\\'")}'; m.dispatchEvent(new Event('input', {bubbles: true})); }
+                                            if (p) { p.value = '${deezerPassword.replace("'", "\\'")}'; p.dispatchEvent(new Event('input', {bubbles: true})); }
+                                            var btn = document.querySelector('button#login_form_submit, button[type="submit"]');
+                                            if (btn) btn.click();
+                                        })();
+                                        """.trimIndent(),
+                                        null
+                                    )
+                                } else {
+                                    statusMessage = "Please enter both Deezer email and password."
+                                    hasError = true
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(DEEZER_PURPLE),
+                                contentColor = Color.White,
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("deezer_credentials_submit"),
                         ) {
-                            Column {
-                                Text("1. Open deezer.com in any web browser and log in.", color = Color(0xFFCCCCCC), fontSize = 12.sp)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("2. Press F12 (DevTools) → Application → Cookies → https://www.deezer.com.", color = Color(0xFFCCCCCC), fontSize = 12.sp)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("3. Copy the 'arl' cookie string (192-character alphanumeric key) and paste it here.", color = Color(0xFFCCCCCC), fontSize = 12.sp)
+                            Text("Sign In with Deezer Credentials", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = "Or Deezer ARL Token",
+                            color = Color(DEEZER_PURPLE),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        OutlinedTextField(
+                            value = arlInput,
+                            onValueChange = { arlInput = it },
+                            placeholder = { Text("Paste your 'arl' cookie string…", color = Color(0xFF666677), fontSize = 13.sp) },
+                            singleLine = false,
+                            maxLines = 3,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("deezer_arl_input_field"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(DEEZER_PURPLE),
+                                unfocusedBorderColor = Color(0xFF382A4A),
+                                focusedContainerColor = Color(0xFF0F0B17),
+                                unfocusedContainerColor = Color(0xFF0F0B17),
+                            ),
+                            trailingIcon = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (arlInput.isNotBlank()) {
+                                        IconButton(
+                                            onClick = { arlInput = "" },
+                                            modifier = Modifier.size(28.dp),
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Clear",
+                                                tint = Color.Gray,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = { pasteFromClipboard() },
+                                        modifier = Modifier.testTag("paste_deezer_arl_btn"),
+                                    ) {
+                                        Text("Paste", color = Color(DEEZER_PURPLE), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                focusManager.clearFocus()
+                                executeDeezerAuth(arlInput.trim())
+                            })
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { showGuide = !showGuide }
+                                .padding(vertical = 4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Info",
+                                tint = Color(0xFF9988AA),
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (showGuide) "Hide token guide" else "How to obtain your Deezer ARL token",
+                                color = Color(0xFF9988AA),
+                                fontSize = 12.sp,
+                            )
+                        }
+
+                        if (showGuide) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF0F0A18), RoundedCornerShape(8.dp))
+                                    .padding(10.dp)
+                            ) {
+                                Column {
+                                    Text("1. Open deezer.com in browser and log in.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text("2. DevTools (F12) → Application → Cookies → https://www.deezer.com.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text("3. Copy 'arl' cookie and paste it above.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Button(
+                            onClick = {
+                                focusManager.clearFocus()
+                                executeDeezerAuth(arlInput.trim())
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF261D36),
+                                contentColor = Color.White,
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("deezer_connect_button"),
+                            enabled = !isProcessing,
+                        ) {
+                            if (isProcessing) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Verifying…", fontWeight = FontWeight.Bold)
+                            } else {
+                                Text(
+                                    text = if (isConnected) "Verify & Save Token" else "Connect Deezer HiFi",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                )
                             }
                         }
                     }
+                }
+            }
 
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Connect Deezer Button
-                    Button(
-                        onClick = {
-                            focusManager.clearFocus()
-                            executeDeezerAuth(arlInput.trim())
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(DEEZER_PURPLE),
-                            contentColor = Color.White,
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+            // MODE 1: Direct Interactive Web Portal
+            if (loginMode == 1) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF100B17))
+                        .border(1.dp, Color(0xFF382A4A), RoundedCornerShape(12.dp))
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("deezer_connect_button"),
-                        enabled = !isProcessing,
+                            .background(Color(0xFF201530))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        if (isProcessing) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(DEEZER_PURPLE))
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("Verifying Deezer…", fontWeight = FontWeight.Bold)
-                        } else {
-                            Icon(
-                                imageVector = if (isConnected) Icons.Default.CheckCircle else Icons.Default.Check,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isConnected) "Verify & Save Token" else "Connect Deezer HiFi",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
+                                "deezer.com/login",
+                                color = Color.LightGray,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                deezerWebViewRef?.reload()
+                            },
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Reload",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    if (webViewLoading) {
+                        LinearProgressIndicator(
+                            progress = { webViewProgress },
+                            modifier = Modifier.fillMaxWidth().height(2.dp),
+                            color = Color(DEEZER_PURPLE),
+                            trackColor = Color.DarkGray,
+                        )
+                    }
 
-                    // Optional In-app web sign-in
-                    Button(
-                        onClick = { showWebSheet = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF241B33),
-                            contentColor = Color.White,
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp)
-                            .testTag("open_deezer_web_login_button"),
+                            .height(460.dp)
                     ) {
-                        Text("Open Deezer Web Sign-In Browser", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+
+                                WebView(ctx).apply {
+                                    deezerWebViewRef = this
+                                    cookieManager.setAcceptThirdPartyCookies(this, true)
+                                    settings.apply {
+                                        javaScriptEnabled = true
+                                        domStorageEnabled = true
+                                        databaseEnabled = true
+                                        loadWithOverviewMode = true
+                                        useWideViewPort = true
+                                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                        javaScriptCanOpenWindowsAutomatically = true
+                                        setSupportMultipleWindows(false)
+                                        cacheMode = WebSettings.LOAD_DEFAULT
+                                        userAgentString = CHROME_MOBILE_UA
+                                    }
+
+                                    webChromeClient = object : WebChromeClient() {
+                                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                            webViewProgress = (newProgress.coerceIn(5, 100)) / 100f
+                                            webViewLoading = newProgress < 100
+                                        }
+                                    }
+
+                                    webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                            return false
+                                        }
+
+                                        override fun onPageFinished(view: WebView?, url: String?) {
+                                            webViewLoading = false
+                                            cookieManager.flush()
+                                            val extractedArl = extractDeezerCookie(cookieManager, "arl")
+                                            if (!extractedArl.isNullOrBlank() && captured.compareAndSet(false, true)) {
+                                                arlInput = extractedArl
+                                                executeDeezerAuth(extractedArl)
+                                            }
+                                        }
+
+                                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                            if (request?.isForMainFrame == true) {
+                                                webViewLoading = false
+                                            }
+                                        }
+                                    }
+
+                                    loadUrl(DEEZER_LOGIN_URL)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -473,119 +766,28 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-        }
-
-        // OPTIONAL: In-App Web Sign-In Modal Sheet for Deezer
-        if (showWebSheet) {
-            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-            ModalBottomSheet(
-                onDismissRequest = { showWebSheet = false },
-                sheetState = sheetState,
-                containerColor = Color(0xFF100B17),
-                dragHandle = null,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
-                    // Header
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .background(Color(0xFF1D142A))
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        IconButton(onClick = {
-                            val cm = CookieManager.getInstance()
-                            cm.removeAllCookies(null)
-                            cm.flush()
-                            webViewRef?.clearCache(true)
-                            webViewRef?.loadUrl(DEEZER_LOGIN_URL)
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = Color.White)
-                        }
-
-                        Text(
-                            text = "Deezer Web Sign-In",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                        )
-
-                        IconButton(onClick = { showWebSheet = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
-                        }
-                    }
-
-                    if (webViewLoading) {
-                        LinearProgressIndicator(
-                            progress = { webViewProgress },
-                            modifier = Modifier.fillMaxWidth().height(2.dp),
-                            color = Color(DEEZER_PURPLE),
-                            trackColor = Color.DarkGray,
-                        )
-                    }
-
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            val cookieManager = CookieManager.getInstance()
-                            cookieManager.setAcceptCookie(true)
-
-                            WebView(ctx).apply {
-                                webViewRef = this
-                                cookieManager.setAcceptThirdPartyCookies(this, true)
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.databaseEnabled = true
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                        webViewProgress = (newProgress.coerceIn(5, 100)) / 100f
-                                        webViewLoading = newProgress < 100
-                                    }
-                                }
-
-                                webViewClient = object : WebViewClient() {
-                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                        webViewLoading = false
-                                        cookieManager.flush()
-                                        val extractedArl = extractDeezerCookie("arl")
-                                        if (!extractedArl.isNullOrBlank() && captured.compareAndSet(false, true)) {
-                                            arlInput = extractedArl
-                                            showWebSheet = false
-                                            executeDeezerAuth(extractedArl)
-                                        }
-                                    }
-                                }
-
-                                loadUrl(DEEZER_LOGIN_URL)
-                            }
-                        }
-                    )
-                }
-            }
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
 
-private fun extractDeezerCookie(name: String): String? {
-    val all = CookieManager.getInstance().getCookie("https://www.deezer.com") ?: return null
-    return all.split(";")
-        .mapNotNull {
-            val parts = it.trim().split("=", limit = 2)
-            if (parts.size == 2) parts[0].trim() to parts[1].trim() else null
-        }
-        .firstOrNull { it.first == name && it.second.isNotBlank() }
-        ?.second
+private fun extractDeezerCookie(cookieManager: CookieManager, name: String): String? {
+    val domains = listOf(
+        "https://www.deezer.com",
+        "https://deezer.com",
+        "https://.deezer.com",
+        "https://www.deezer.com/login",
+    )
+    for (domain in domains) {
+        val allCookies = cookieManager.getCookie(domain) ?: continue
+        val found = allCookies.split(";")
+            .mapNotNull {
+                val parts = it.trim().split("=", limit = 2)
+                if (parts.size == 2) parts[0].trim() to parts[1].trim() else null
+            }
+            .firstOrNull { it.first == name && it.second.isNotBlank() }
+            ?.second
+        if (found != null) return found
+    }
+    return null
 }
