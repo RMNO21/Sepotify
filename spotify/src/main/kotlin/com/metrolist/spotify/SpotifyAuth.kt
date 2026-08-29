@@ -32,8 +32,9 @@ object SpotifyAuth {
     private const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+    // Updated LOGIN_URL to direct login page without URL encoding - allows WebView redirect handling
     const val LOGIN_URL =
-        "https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
+        "https://accounts.spotify.com/en/login"
 
     // Direct entry to Spotify's web signup flow.
     const val SIGNUP_URL = "https://www.spotify.com/signup"
