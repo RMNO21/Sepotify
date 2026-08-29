@@ -12,7 +12,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.aistudio.sepotify.player"
+        applicationId = "com.aistudio.sepotifymusic.vwnxyz"
         minSdk = 24
         targetSdk = 34
         versionCode = 101
