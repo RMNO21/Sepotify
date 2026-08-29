@@ -15,7 +15,7 @@ android {
         applicationId = "com.aistudio.sepotifymusic.vwnxyz"
         minSdk = 24
         targetSdk = 34
-        versionCode = 101
+        versionCode = 102
         versionName = "2.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
