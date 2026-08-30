@@ -213,6 +213,7 @@ fun SpotifyLoginScreen(navController: NavController) {
 
         scope.launch(Dispatchers.IO) {
             SpotifySession.setSpDc(context, cleanCookie)
+            SpotifySession.setGuestMode(context, false)
             var errorCaught: Throwable? = null
             var success = false
 
@@ -220,15 +221,16 @@ fun SpotifyLoginScreen(navController: NavController) {
                 val result = SpotifyAuth.fetchAccessToken(cleanCookie, "")
                 result.onSuccess { token ->
                     Spotify.accessToken = token.accessToken
+                    SpotifySession.setSpDc(context, cleanCookie)
                     success = true
                     withContext(Dispatchers.Main) {
                         isSpotifyLoggedIn = true
-                        statusMessage = "Spotify account verified successfully!"
+                        statusMessage = "Spotify account verified! Entering Sepotify..."
                         successMessage = "Spotify Connected"
                         isProcessing = false
-                        if (!isDeezerLoggedIn) {
-                            selectedTab = 1
-                        }
+                        com.music.spotui.di.SpotifyWebPlayer.refreshLogin(context)
+                        delay(400)
+                        navigateToHome()
                     }
                     return@launch
                 }.onFailure { e ->
@@ -242,7 +244,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                 withContext(Dispatchers.Main) {
                     isProcessing = false
                     hasError = true
-                    statusMessage = "Spotify login verification failed: ${errorCaught?.localizedMessage ?: "Invalid token"}"
+                    statusMessage = "Spotify verification failed: ${errorCaught?.localizedMessage ?: "Invalid token"}"
                 }
             }
         }
@@ -520,538 +522,443 @@ fun SpotifyLoginScreen(navController: NavController) {
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Spotify Authentication",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-
-                            // Sub-mode toggle: Quick Connect vs In-App Webview
-                            Row(
-                                modifier = Modifier
-                                    .background(Color(0xFF22222E), RoundedCornerShape(20.dp))
-                                    .padding(2.dp)
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(if (spotifyLoginMode == 0) Color(SPOTIFY_GREEN) else Color.Transparent)
-                                        .clickable { spotifyLoginMode = 0 }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                                    contentAlignment = Alignment.Center
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(SPOTIFY_GREEN).copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_sepotify_logo),
+                                        contentDescription = "Spotify",
+                                        tint = Color(SPOTIFY_GREEN),
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Spotify Web Login",
+                                        color = Color.White,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Text(
+                                        text = if (isSpotifyLoggedIn) "Session Active ✓" else "Official Spotify Web Portal",
+                                        color = if (isSpotifyLoggedIn) Color(SPOTIFY_GREEN) else Color(0xFF9E9E9E),
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { showSpotifyGuide = !showSpotifyGuide },
+                                    modifier = Modifier.height(32.dp)
                                 ) {
                                     Text(
-                                        "Quick Connect",
-                                        color = if (spotifyLoginMode == 0) Color.Black else Color.Gray,
+                                        if (showSpotifyGuide) "Hide Token" else "Manual Token",
+                                        color = Color(SPOTIFY_GREEN),
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(if (spotifyLoginMode == 1) Color(SPOTIFY_GREEN) else Color.Transparent)
-                                        .clickable { spotifyLoginMode = 1 }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                                    contentAlignment = Alignment.Center
+                                IconButton(
+                                    onClick = { spotifyWebViewRef?.reload() },
+                                    modifier = Modifier.size(32.dp)
                                 ) {
-                                    Text(
-                                        "Web Portal",
-                                        color = if (spotifyLoginMode == 1) Color.Black else Color.Gray,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Reload",
+                                        tint = Color.LightGray,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (spotifyLoginMode == 0)
-                                "Connect your Spotify account seamlessly with guaranteed external browser login or session token."
-                            else
-                                "Optional in-app embedded browser for Spotify web login.",
-                            color = Color(0xFF9E9E9E),
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp,
-                        )
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        if (spotifyLoginMode == 0) {
-                            // METHOD 1: LAUNCH SPOTIFY IN EXTERNAL BROWSER (100% Reliable, Zero Blocks)
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth(),
+                        // In-App SpotUI WebView Container
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF0C0C10))
+                                .border(1.dp, Color(0xFF282836), RoundedCornerShape(12.dp))
+                        ) {
+                            // Mini Web Navigation Bar
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1B1B24))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(36.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(SPOTIFY_GREEN).copy(alpha = 0.15f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text("🌐", fontSize = 18.sp)
-                                        }
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column {
-                                            Text(
-                                                text = "1. Official Browser Login",
-                                                color = Color.White,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold,
-                                            )
-                                            Text(
-                                                text = "Google, Apple, Facebook & Email login work 100%",
-                                                color = Color(SPOTIFY_GREEN),
-                                                fontSize = 11.sp,
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text(
-                                        text = "Opens Spotify in Chrome or your default browser where security checks and anti-bot verifications always succeed.",
-                                        color = Color(0xFFB0B0B0),
-                                        fontSize = 12.sp,
-                                        lineHeight = 16.sp,
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(SPOTIFY_GREEN))
                                     )
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "accounts.spotify.com/login",
+                                        color = Color(0xFFB0B0B0),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
 
-                                    Button(
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        onClick = {
+                                            val target = if (spotifyWebViewRef?.url?.contains("open.spotify.com") == true) {
+                                                SpotifyAuth.LOGIN_URL
+                                            } else {
+                                                SpotifyAuth.WEB_PLAYER_URL
+                                            }
+                                            spotifyWebViewRef?.loadUrl(target)
+                                        },
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text(
+                                            "Switch Portal",
+                                            color = Color(SPOTIFY_GREEN),
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    TextButton(
                                         onClick = {
                                             try {
-                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SpotifyAuth.LOGIN_URL)).apply {
-                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                }
-                                                context.startActivity(intent)
-                                                statusMessage = "Opened Spotify in browser! Log in, copy your 'sp_dc' cookie, and paste below."
-                                            } catch (e: Exception) {
-                                                statusMessage = "Could not open browser: ${e.message}"
-                                                hasError = true
-                                            }
+                                                val cookieManager = CookieManager.getInstance()
+                                                cookieManager.removeAllCookies(null)
+                                                cookieManager.flush()
+                                                spotifyWebViewRef?.clearCache(true)
+                                                spotifyWebViewRef?.loadUrl(SpotifyAuth.LOGIN_URL)
+                                                statusMessage = "Cleared cookies and reloaded."
+                                            } catch (_: Exception) {}
                                         },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(SPOTIFY_GREEN),
-                                            contentColor = Color.Black,
-                                        ),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(44.dp)
-                                            .testTag("open_spotify_browser_button"),
+                                        modifier = Modifier.height(26.dp)
                                     ) {
-                                        Text("Open Spotify in Browser", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // METHOD 2: SESSION TOKEN (sp_dc) DIRECT PASTE & VALIDATION
-                            Text(
-                                text = "2. Session Token (sp_dc)",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            OutlinedTextField(
-                                value = spotifySpDc,
-                                onValueChange = { spotifySpDc = it },
-                                placeholder = { Text("Paste your 'sp_dc' cookie string…", color = Color(0xFF666666), fontSize = 13.sp) },
-                                singleLine = false,
-                                maxLines = 3,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("spotify_sp_dc_input"),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedBorderColor = Color(SPOTIFY_GREEN),
-                                    unfocusedBorderColor = Color(0xFF33333E),
-                                    focusedContainerColor = Color(0xFF101016),
-                                    unfocusedContainerColor = Color(0xFF101016),
-                                ),
-                                trailingIcon = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (spotifySpDc.isNotBlank()) {
-                                            IconButton(
-                                                onClick = { spotifySpDc = "" },
-                                                modifier = Modifier.size(28.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Clear",
-                                                    tint = Color.Gray,
-                                                    modifier = Modifier.size(16.dp),
-                                                )
-                                            }
-                                        }
-                                        TextButton(
-                                            onClick = { pasteFromClipboard { spotifySpDc = it } },
-                                            modifier = Modifier.testTag("paste_spotify_sp_dc_button")
-                                        ) {
-                                            Text("Paste", color = Color(SPOTIFY_GREEN), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                },
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = {
-                                    focusManager.clearFocus()
-                                    executeSpotifyLogin(spotifySpDc)
-                                })
-                            )
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // How to get sp_dc expander
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { showSpotifyGuide = !showSpotifyGuide }
-                                    .padding(vertical = 4.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = "Info",
-                                    tint = Color(0xFF888888),
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (showSpotifyGuide) "Hide token guide" else "How to obtain your Spotify sp_dc cookie",
-                                    color = Color(0xFF888888),
-                                    fontSize = 12.sp,
-                                )
-                            }
-
-                            if (showSpotifyGuide) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color(0xFF0F0F14), RoundedCornerShape(8.dp))
-                                        .padding(10.dp)
-                                ) {
-                                    Column {
-                                        Text("1. Tap 'Open Spotify in Browser' above and log in.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                        Spacer(modifier = Modifier.height(3.dp))
-                                        Text("2. In browser dev tools or cookie manager, find cookie named 'sp_dc'.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                        Spacer(modifier = Modifier.height(3.dp))
-                                        Text("3. Copy the cookie value and paste it into the field above.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Button(
-                                onClick = {
-                                    focusManager.clearFocus()
-                                    executeSpotifyLogin(spotifySpDc)
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF242432),
-                                    contentColor = Color.White,
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(44.dp)
-                                    .testTag("spotify_login_token_submit_button"),
-                                enabled = !isProcessing,
-                            ) {
-                                if (isProcessing) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color(SPOTIFY_GREEN), strokeWidth = 2.dp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                }
-                                Text("Verify & Connect Spotify", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // METHOD 3: INSTANT GUEST / EXPLORER ACCESS (NO ACCOUNT NEEDED)
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF13131A)),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Text(
-                                        text = "3. Instant Guest Mode (No Account Required)",
-                                        color = Color(0xFFCCCCCC),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Start streaming immediately with search, charts, and lossless Deezer/YouTube playback without logging in.",
-                                        color = Color(0xFF888888),
-                                        fontSize = 11.sp,
-                                        lineHeight = 15.sp,
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-
-                                    Button(
-                                        onClick = {
-                                            SpotifySession.setGuestMode(context, true)
-                                            navigateToHome()
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF2E2E3C),
-                                            contentColor = Color.White,
-                                        ),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(42.dp)
-                                            .testTag("continue_as_guest_button"),
-                                    ) {
-                                        Text("Continue as Guest", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    }
-                                }
-                            }
-                        }
-
-                        // MODE 1: In-App Embedded Web View
-                        if (spotifyLoginMode == 1) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xFF0F0F14))
-                                    .border(1.dp, Color(0xFF2B2B38), RoundedCornerShape(12.dp))
-                            ) {
-                                // WebView Toolbar
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color(0xFF1E1E28))
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(SPOTIFY_GREEN))
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            "accounts.spotify.com",
+                                            "Reset",
                                             color = Color.LightGray,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium
+                                            fontSize = 11.sp
                                         )
                                     }
-
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        TextButton(
-                                            onClick = {
-                                                val target = if (spotifyWebViewRef?.url?.contains("open.spotify.com") == true) {
-                                                    SpotifyAuth.LOGIN_URL
-                                                } else {
-                                                    SpotifyAuth.WEB_PLAYER_URL
-                                                }
-                                                spotifyWebViewRef?.loadUrl(target)
-                                            },
-                                            modifier = Modifier.height(30.dp)
-                                        ) {
-                                            Text(
-                                                "Switch Portal",
-                                                color = Color(SPOTIFY_GREEN),
-                                                fontSize = 11.sp
-                                            )
-                                        }
-
-                                        TextButton(
-                                            onClick = {
-                                                isSpotifyDesktopMode = !isSpotifyDesktopMode
-                                                spotifyWebViewRef?.settings?.userAgentString =
-                                                    if (isSpotifyDesktopMode) SpotifyAuth.DESKTOP_USER_AGENT else CHROME_MOBILE_UA
-                                                spotifyWebViewRef?.reload()
-                                            },
-                                            modifier = Modifier.height(30.dp)
-                                        ) {
-                                            Text(
-                                                if (isSpotifyDesktopMode) "Mobile" else "Desktop",
-                                                color = Color.LightGray,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-
-                                        IconButton(
-                                            onClick = {
-                                                spotifyWebViewRef?.reload()
-                                            },
-                                            modifier = Modifier.size(30.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Refresh,
-                                                contentDescription = "Reload",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
                                 }
+                            }
 
-                                if (spotifyWebLoading) {
-                                    LinearProgressIndicator(
-                                        progress = { spotifyWebProgress },
-                                        modifier = Modifier.fillMaxWidth().height(2.dp),
-                                        color = Color(SPOTIFY_GREEN),
-                                        trackColor = Color.DarkGray,
-                                    )
-                                }
+                            if (spotifyWebLoading) {
+                                LinearProgressIndicator(
+                                    progress = { spotifyWebProgress },
+                                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                                    color = Color(SPOTIFY_GREEN),
+                                    trackColor = Color(0xFF1E1E28),
+                                )
+                            }
 
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(480.dp)
-                                ) {
-                                    AndroidView(
-                                        modifier = Modifier.fillMaxSize(),
-                                        factory = { ctx ->
-                                            val cookieManager = CookieManager.getInstance()
-                                            cookieManager.setAcceptCookie(true)
+                            // Embedded WebView with SpotUI User Agent and cookie monitoring
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(490.dp)
+                            ) {
+                                AndroidView(
+                                    modifier = Modifier.fillMaxSize(),
+                                    factory = { ctx ->
+                                        val cookieManager = CookieManager.getInstance()
+                                        cookieManager.setAcceptCookie(true)
 
-                                            WebView(ctx).apply {
-                                                spotifyWebViewRef = this
-                                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                                                setBackgroundColor(android.graphics.Color.parseColor("#121212"))
-                                                cookieManager.setAcceptThirdPartyCookies(this, true)
+                                        WebView(ctx).apply {
+                                            spotifyWebViewRef = this
+                                            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                            cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                                                try {
-                                                    WebView.setWebContentsDebuggingEnabled(true)
-                                                } catch (_: Throwable) {}
+                                            try {
+                                                WebView.setWebContentsDebuggingEnabled(true)
+                                            } catch (_: Throwable) {}
 
-                                                settings.apply {
-                                                    javaScriptEnabled = true
-                                                    domStorageEnabled = true
-                                                    databaseEnabled = true
-                                                    loadsImagesAutomatically = true
-                                                    loadWithOverviewMode = true
-                                                    useWideViewPort = true
-                                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                                    javaScriptCanOpenWindowsAutomatically = true
-                                                    setSupportMultipleWindows(true)
-                                                    setSupportZoom(true)
-                                                    builtInZoomControls = true
-                                                    displayZoomControls = false
-                                                    allowFileAccess = false
-                                                    allowContentAccess = true
-                                                    cacheMode = WebSettings.LOAD_DEFAULT
-                                                    userAgentString = if (isSpotifyDesktopMode) SpotifyAuth.DESKTOP_USER_AGENT else CHROME_MOBILE_UA
-                                                }
+                                            settings.apply {
+                                                javaScriptEnabled = true
+                                                domStorageEnabled = true
+                                                databaseEnabled = true
+                                                loadsImagesAutomatically = true
+                                                loadWithOverviewMode = true
+                                                useWideViewPort = true
+                                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                                javaScriptCanOpenWindowsAutomatically = true
+                                                setSupportMultipleWindows(true)
+                                                setSupportZoom(false)
+                                                builtInZoomControls = false
+                                                displayZoomControls = false
+                                                allowFileAccess = true
+                                                allowContentAccess = true
+                                                cacheMode = WebSettings.LOAD_DEFAULT
 
-                                                webChromeClient = object : WebChromeClient() {
-                                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                                        spotifyWebProgress = (newProgress.coerceIn(5, 100)) / 100f
-                                                        spotifyWebLoading = newProgress < 100
+                                                // SpotUI Clean UA Standard: Remove '; wv' and 'Version/4.0' from default WebView UA
+                                                val defaultUa = userAgentString
+                                                val cleanUa = defaultUa
+                                                    .replace("; wv", "")
+                                                    .replace(Regex("Version/\\d+\\.\\d+\\s*"), "")
+                                                userAgentString = cleanUa
+                                            }
+
+                                            webChromeClient = object : WebChromeClient() {
+                                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                                    spotifyWebProgress = (newProgress.coerceIn(5, 100)) / 100f
+                                                    spotifyWebLoading = newProgress < 100
+                                                    
+                                                    // Quick cookie check on progress
+                                                    cookieManager.flush()
+                                                    val spDc = extractCookie(cookieManager, "sp_dc")
+                                                    if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                        spotifySpDc = spDc
+                                                        executeSpotifyLogin(spDc)
                                                     }
+                                                }
 
-                                                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                                                        consoleMessage?.let {
-                                                            Timber.d("[Spotify WebView JS] ${it.message()} -- line ${it.lineNumber()}")
+                                                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                                    consoleMessage?.let {
+                                                        Timber.d("[SpotUI WebView JS] ${it.message()} -- line ${it.lineNumber()}")
+                                                    }
+                                                    return true
+                                                }
+
+                                                override fun onCreateWindow(
+                                                    view: WebView?,
+                                                    isDialog: Boolean,
+                                                    isUserGesture: Boolean,
+                                                    resultMsg: android.os.Message?
+                                                ): Boolean {
+                                                    val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                                    val tempWebView = WebView(ctx).apply {
+                                                        settings.apply {
+                                                            javaScriptEnabled = true
+                                                            domStorageEnabled = true
+                                                            databaseEnabled = true
+                                                            val defUa = userAgentString
+                                                            userAgentString = defUa
+                                                                .replace("; wv", "")
+                                                                .replace(Regex("Version/\\d+\\.\\d+\\s*"), "")
                                                         }
-                                                        return true
-                                                    }
-
-                                                    override fun onCreateWindow(
-                                                        view: WebView?,
-                                                        isDialog: Boolean,
-                                                        isUserGesture: Boolean,
-                                                        resultMsg: android.os.Message?
-                                                    ): Boolean {
-                                                        val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                                                        val tempWebView = WebView(ctx).apply {
-                                                            webViewClient = object : WebViewClient() {
-                                                                override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
-                                                                    req?.url?.toString()?.let { targetUrl ->
-                                                                        view?.loadUrl(targetUrl)
-                                                                    }
-                                                                    return true
+                                                        cookieManager.setAcceptThirdPartyCookies(this, true)
+                                                        webViewClient = object : WebViewClient() {
+                                                            override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                                                req?.url?.toString()?.let { targetUrl ->
+                                                                    view?.loadUrl(targetUrl)
+                                                                }
+                                                                return true
+                                                            }
+                                                            override fun onPageFinished(v: WebView?, url: String?) {
+                                                                super.onPageFinished(v, url)
+                                                                cookieManager.flush()
+                                                                val spDc = extractCookie(cookieManager, "sp_dc")
+                                                                if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                                    spotifySpDc = spDc
+                                                                    executeSpotifyLogin(spDc)
                                                                 }
                                                             }
                                                         }
-                                                        transport.webView = tempWebView
-                                                        resultMsg.sendToTarget()
+                                                    }
+                                                    transport.webView = tempWebView
+                                                    resultMsg.sendToTarget()
+                                                    return true
+                                                }
+                                            }
+
+                                            webViewClient = object : WebViewClient() {
+                                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                                    val urlStr = request?.url?.toString() ?: ""
+                                                    val scheme = request?.url?.scheme?.lowercase() ?: ""
+
+                                                    if (scheme != "http" && scheme != "https") {
+                                                        cookieManager.flush()
+                                                        val spDc = extractCookie(cookieManager, "sp_dc")
+                                                        if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                            spotifySpDc = spDc
+                                                            executeSpotifyLogin(spDc)
+                                                        }
                                                         return true
                                                     }
+                                                    return false
                                                 }
 
-                                                webViewClient = object : WebViewClient() {
-                                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                                        val urlStr = request?.url?.toString() ?: ""
-                                                        val scheme = request?.url?.scheme?.lowercase() ?: ""
-
-                                                        if (scheme != "http" && scheme != "https") {
-                                                            cookieManager.flush()
-                                                            val spDc = extractCookie(cookieManager, "sp_dc")
-                                                            if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
-                                                                spotifySpDc = spDc
-                                                                executeSpotifyLogin(spDc)
-                                                            }
-                                                            return true
-                                                        }
-                                                        return false
+                                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                                    super.onPageStarted(view, url, favicon)
+                                                    cookieManager.flush()
+                                                    val spDc = extractCookie(cookieManager, "sp_dc")
+                                                    if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                        spotifySpDc = spDc
+                                                        executeSpotifyLogin(spDc)
                                                     }
+                                                }
 
-                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        cookieManager.flush()
-                                                        val spDc = extractCookie(cookieManager, "sp_dc")
-                                                        if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
-                                                            spotifySpDc = spDc
-                                                            executeSpotifyLogin(spDc)
-                                                        }
+                                                override fun onPageFinished(view: WebView?, url: String?) {
+                                                    super.onPageFinished(view, url)
+                                                    spotifyWebLoading = false
+                                                    cookieManager.flush()
+                                                    val spDc = extractCookie(cookieManager, "sp_dc")
+                                                    if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                        spotifySpDc = spDc
+                                                        executeSpotifyLogin(spDc)
                                                     }
+                                                }
 
-                                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
+                                                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                                                    super.doUpdateVisitedHistory(view, url, isReload)
+                                                    cookieManager.flush()
+                                                    val spDc = extractCookie(cookieManager, "sp_dc")
+                                                    if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                        spotifySpDc = spDc
+                                                        executeSpotifyLogin(spDc)
+                                                    }
+                                                }
+
+                                                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                                    super.onReceivedError(view, request, error)
+                                                    if (request?.isForMainFrame == true) {
                                                         spotifyWebLoading = false
-                                                        cookieManager.flush()
-                                                        val spDc = extractCookie(cookieManager, "sp_dc")
-                                                        if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
-                                                            spotifySpDc = spDc
-                                                            executeSpotifyLogin(spDc)
-                                                        }
-                                                    }
-
-                                                    override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                                        super.onReceivedError(view, request, error)
-                                                        if (request?.isForMainFrame == true) {
-                                                            spotifyWebLoading = false
-                                                        }
                                                     }
                                                 }
+                                            }
 
-                                                loadUrl(SpotifyAuth.LOGIN_URL)
+                                            loadUrl(SpotifyAuth.LOGIN_URL)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // MANUAL TOKEN / EXTERNAL BROWSER EXPANDER
+                        AnimatedVisibility(
+                            visible = showSpotifyGuide,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                        ) {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "Paste Session Cookie (sp_dc)",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    OutlinedTextField(
+                                        value = spotifySpDc,
+                                        onValueChange = { spotifySpDc = it },
+                                        placeholder = { Text("Paste 'sp_dc' cookie string…", color = Color(0xFF666666), fontSize = 12.sp) },
+                                        singleLine = false,
+                                        maxLines = 2,
+                                        modifier = Modifier.fillMaxWidth().testTag("spotify_sp_dc_input"),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = Color(SPOTIFY_GREEN),
+                                            unfocusedBorderColor = Color(0xFF33333E),
+                                            focusedContainerColor = Color(0xFF101016),
+                                            unfocusedContainerColor = Color(0xFF101016),
+                                        ),
+                                        trailingIcon = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                if (spotifySpDc.isNotBlank()) {
+                                                    IconButton(onClick = { spotifySpDc = "" }, modifier = Modifier.size(26.dp)) {
+                                                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                                    }
+                                                }
+                                                TextButton(
+                                                    onClick = { pasteFromClipboard { spotifySpDc = it } },
+                                                    modifier = Modifier.testTag("paste_spotify_sp_dc_button")
+                                                ) {
+                                                    Text("Paste", color = Color(SPOTIFY_GREEN), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                }
                                             }
                                         }
                                     )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                focusManager.clearFocus()
+                                                executeSpotifyLogin(spotifySpDc)
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(SPOTIFY_GREEN),
+                                                contentColor = Color.Black,
+                                            ),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.weight(1f).height(38.dp),
+                                            enabled = !isProcessing,
+                                        ) {
+                                            Text("Verify Token", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                try {
+                                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SpotifyAuth.LOGIN_URL)).apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    context.startActivity(intent)
+                                                    statusMessage = "Opened in browser. Log in, copy 'sp_dc' cookie, and paste here."
+                                                } catch (e: Exception) {
+                                                    statusMessage = "Could not launch browser: ${e.message}"
+                                                    hasError = true
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFF2E2E3C),
+                                                contentColor = Color.White,
+                                            ),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.weight(1f).height(38.dp),
+                                        ) {
+                                            Text("Open in Browser", fontWeight = FontWeight.Medium, fontSize = 12.sp)
+                                        }
+                                    }
                                 }
                             }
+                        }
+
+                        // Instant Guest Access button
+                        Button(
+                            onClick = {
+                                SpotifySession.setGuestMode(context, true)
+                                navigateToHome()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF1E1E28),
+                                contentColor = Color(0xFFDDDDDD),
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("continue_as_guest_button"),
+                        ) {
+                            Text("Continue as Guest (Instant Access)", fontWeight = FontWeight.Medium, fontSize = 13.sp)
                         }
                     }
                 }
