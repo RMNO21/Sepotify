@@ -37,11 +37,13 @@ object SpotifyAuth {
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
     const val LOGIN_URL =
-        "https://accounts.spotify.com/login"
+        "https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
     const val DIRECT_LOGIN_URL =
-        "https://accounts.spotify.com/en/login"
+        "https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
     const val WEB_PLAYER_URL =
         "https://open.spotify.com"
+    const val ACCOUNTS_LOGIN_URL =
+        "https://accounts.spotify.com/en/login"
 
     // Direct entry to Spotify's web signup flow.
     const val SIGNUP_URL = "https://www.spotify.com/signup"

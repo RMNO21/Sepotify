@@ -3,6 +3,8 @@ package com.music.spotui.ui.screens
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -114,7 +116,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val SPOTIFY_GREEN = 0xFF1ED760
 private const val DEEZER_PURPLE = 0xFFA238FF
 private const val CHROME_MOBILE_UA =
-    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 private const val CHROME_DESKTOP_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 private const val DEEZER_LOGIN_URL = "https://www.deezer.com/login"
@@ -510,7 +512,7 @@ fun SpotifyLoginScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(16.dp))
 
             // ═════════════════════════════════════════════════════════════════════════
-            // TAB 0: SPOTIFY LOGIN
+            // TAB 0: SPOTIFY AUTHENTICATION
             // ═════════════════════════════════════════════════════════════════════════
             if (selectedTab == 0) {
                 Card(
@@ -525,13 +527,13 @@ fun SpotifyLoginScreen(navController: NavController) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Spotify Direct Login",
+                                text = "Spotify Authentication",
                                 color = Color.White,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                             )
 
-                            // Toggle between Direct Web Login and Credentials/Token input
+                            // Sub-mode toggle: Quick Connect vs In-App Webview
                             Row(
                                 modifier = Modifier
                                     .background(Color(0xFF22222E), RoundedCornerShape(20.dp))
@@ -546,7 +548,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        "Web Form",
+                                        "Quick Connect",
                                         color = if (spotifyLoginMode == 0) Color.Black else Color.Gray,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
@@ -561,7 +563,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        "Credentials",
+                                        "Web Portal",
                                         color = if (spotifyLoginMode == 1) Color.Black else Color.Gray,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
@@ -573,9 +575,9 @@ fun SpotifyLoginScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = if (spotifyLoginMode == 0)
-                                "Log in directly using Spotify's official web login below (supports Email, Google, Facebook & Apple)."
+                                "Connect your Spotify account seamlessly with guaranteed external browser login or session token."
                             else
-                                "Enter your Spotify credentials or session token to authenticate directly.",
+                                "Optional in-app embedded browser for Spotify web login.",
                             color = Color(0xFF9E9E9E),
                             fontSize = 12.sp,
                             lineHeight = 16.sp,
@@ -583,8 +585,253 @@ fun SpotifyLoginScreen(navController: NavController) {
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // MODE 0: Embedded Direct Interactive Spotify Web View
                         if (spotifyLoginMode == 0) {
+                            // METHOD 1: LAUNCH SPOTIFY IN EXTERNAL BROWSER (100% Reliable, Zero Blocks)
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(SPOTIFY_GREEN).copy(alpha = 0.15f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("🌐", fontSize = 18.sp)
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = "1. Official Browser Login",
+                                                color = Color.White,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                            Text(
+                                                text = "Google, Apple, Facebook & Email login work 100%",
+                                                color = Color(SPOTIFY_GREEN),
+                                                fontSize = 11.sp,
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        text = "Opens Spotify in Chrome or your default browser where security checks and anti-bot verifications always succeed.",
+                                        color = Color(0xFFB0B0B0),
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp,
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SpotifyAuth.LOGIN_URL)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                context.startActivity(intent)
+                                                statusMessage = "Opened Spotify in browser! Log in, copy your 'sp_dc' cookie, and paste below."
+                                            } catch (e: Exception) {
+                                                statusMessage = "Could not open browser: ${e.message}"
+                                                hasError = true
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(SPOTIFY_GREEN),
+                                            contentColor = Color.Black,
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(44.dp)
+                                            .testTag("open_spotify_browser_button"),
+                                    ) {
+                                        Text("Open Spotify in Browser", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // METHOD 2: SESSION TOKEN (sp_dc) DIRECT PASTE & VALIDATION
+                            Text(
+                                text = "2. Session Token (sp_dc)",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            OutlinedTextField(
+                                value = spotifySpDc,
+                                onValueChange = { spotifySpDc = it },
+                                placeholder = { Text("Paste your 'sp_dc' cookie string…", color = Color(0xFF666666), fontSize = 13.sp) },
+                                singleLine = false,
+                                maxLines = 3,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("spotify_sp_dc_input"),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedBorderColor = Color(SPOTIFY_GREEN),
+                                    unfocusedBorderColor = Color(0xFF33333E),
+                                    focusedContainerColor = Color(0xFF101016),
+                                    unfocusedContainerColor = Color(0xFF101016),
+                                ),
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (spotifySpDc.isNotBlank()) {
+                                            IconButton(
+                                                onClick = { spotifySpDc = "" },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear",
+                                                    tint = Color.Gray,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
+                                        }
+                                        TextButton(
+                                            onClick = { pasteFromClipboard { spotifySpDc = it } },
+                                            modifier = Modifier.testTag("paste_spotify_sp_dc_button")
+                                        ) {
+                                            Text("Paste", color = Color(SPOTIFY_GREEN), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    focusManager.clearFocus()
+                                    executeSpotifyLogin(spotifySpDc)
+                                })
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // How to get sp_dc expander
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { showSpotifyGuide = !showSpotifyGuide }
+                                    .padding(vertical = 4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Info",
+                                    tint = Color(0xFF888888),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (showSpotifyGuide) "Hide token guide" else "How to obtain your Spotify sp_dc cookie",
+                                    color = Color(0xFF888888),
+                                    fontSize = 12.sp,
+                                )
+                            }
+
+                            if (showSpotifyGuide) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFF0F0F14), RoundedCornerShape(8.dp))
+                                        .padding(10.dp)
+                                ) {
+                                    Column {
+                                        Text("1. Tap 'Open Spotify in Browser' above and log in.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text("2. In browser dev tools or cookie manager, find cookie named 'sp_dc'.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text("3. Copy the cookie value and paste it into the field above.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Button(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    executeSpotifyLogin(spotifySpDc)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF242432),
+                                    contentColor = Color.White,
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("spotify_login_token_submit_button"),
+                                enabled = !isProcessing,
+                            ) {
+                                if (isProcessing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color(SPOTIFY_GREEN), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text("Verify & Connect Spotify", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // METHOD 3: INSTANT GUEST / EXPLORER ACCESS (NO ACCOUNT NEEDED)
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF13131A)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "3. Instant Guest Mode (No Account Required)",
+                                        color = Color(0xFFCCCCCC),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Start streaming immediately with search, charts, and lossless Deezer/YouTube playback without logging in.",
+                                        color = Color(0xFF888888),
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Button(
+                                        onClick = {
+                                            SpotifySession.setGuestMode(context, true)
+                                            navigateToHome()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF2E2E3C),
+                                            contentColor = Color.White,
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(42.dp)
+                                            .testTag("continue_as_guest_button"),
+                                    ) {
+                                        Text("Continue as Guest", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        // MODE 1: In-App Embedded Web View
+                        if (spotifyLoginMode == 1) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -708,8 +955,8 @@ fun SpotifyLoginScreen(navController: NavController) {
                                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                                     javaScriptCanOpenWindowsAutomatically = true
                                                     setSupportMultipleWindows(true)
-                                                    setSupportZoom(false)
-                                                    builtInZoomControls = false
+                                                    setSupportZoom(true)
+                                                    builtInZoomControls = true
                                                     displayZoomControls = false
                                                     allowFileAccess = false
                                                     allowContentAccess = true
@@ -758,7 +1005,6 @@ fun SpotifyLoginScreen(navController: NavController) {
                                                         val urlStr = request?.url?.toString() ?: ""
                                                         val scheme = request?.url?.scheme?.lowercase() ?: ""
 
-                                                        // Intercept custom app schemes (like spotify://, intent://) to prevent ERR_UNKNOWN_URL_SCHEME
                                                         if (scheme != "http" && scheme != "https") {
                                                             cookieManager.flush()
                                                             val spDc = extractCookie(cookieManager, "sp_dc")
@@ -804,245 +1050,6 @@ fun SpotifyLoginScreen(navController: NavController) {
                                             }
                                         }
                                     )
-                                }
-                            }
-                        }
-
-                        // MODE 1: Direct Credentials & Token Form
-                        if (spotifyLoginMode == 1) {
-                            Column {
-                                Text(
-                                    text = "Spotify Account Credentials",
-                                    color = Color(SPOTIFY_GREEN),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                OutlinedTextField(
-                                    value = spotifyEmail,
-                                    onValueChange = { spotifyEmail = it },
-                                    placeholder = { Text("Spotify Email or Username", color = Color(0xFF666666), fontSize = 13.sp) },
-                                    singleLine = true,
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Person, contentDescription = "Email", tint = Color.Gray, modifier = Modifier.size(18.dp))
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("spotify_email_input"),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = Color(SPOTIFY_GREEN),
-                                        unfocusedBorderColor = Color(0xFF33333E),
-                                        focusedContainerColor = Color(0xFF101016),
-                                        unfocusedContainerColor = Color(0xFF101016),
-                                    ),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                OutlinedTextField(
-                                    value = spotifyPassword,
-                                    onValueChange = { spotifyPassword = it },
-                                    placeholder = { Text("Spotify Password", color = Color(0xFF666666), fontSize = 13.sp) },
-                                    singleLine = true,
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Lock, contentDescription = "Password", tint = Color.Gray, modifier = Modifier.size(18.dp))
-                                    },
-                                    trailingIcon = {
-                                        IconButton(onClick = { isSpotifyPasswordVisible = !isSpotifyPasswordVisible }) {
-                                            Icon(
-                                                painter = painterResource(
-                                                    id = if (isSpotifyPasswordVisible) R.drawable.visibility else R.drawable.visibility_off
-                                                ),
-                                                contentDescription = "Toggle password",
-                                                tint = Color.Gray,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                    },
-                                    visualTransformation = if (isSpotifyPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("spotify_password_input"),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = Color(SPOTIFY_GREEN),
-                                        unfocusedBorderColor = Color(0xFF33333E),
-                                        focusedContainerColor = Color(0xFF101016),
-                                        unfocusedContainerColor = Color(0xFF101016),
-                                    ),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = {
-                                        focusManager.clearFocus()
-                                        if (spotifyEmail.isNotBlank() && spotifyPassword.isNotBlank()) {
-                                            spotifyLoginMode = 0
-                                            val js = SpotifyAuth.getCredentialInjectionScript(spotifyEmail, spotifyPassword)
-                                            spotifyWebViewRef?.evaluateJavascript(js, null)
-                                            scope.launch {
-                                                delay(800)
-                                                spotifyWebViewRef?.evaluateJavascript(js, null)
-                                            }
-                                        }
-                                    })
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                Button(
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        if (spotifyEmail.isNotBlank() && spotifyPassword.isNotBlank()) {
-                                            spotifyLoginMode = 0
-                                            val js = SpotifyAuth.getCredentialInjectionScript(spotifyEmail, spotifyPassword)
-                                            spotifyWebViewRef?.evaluateJavascript(js, null)
-                                            scope.launch {
-                                                delay(800)
-                                                spotifyWebViewRef?.evaluateJavascript(js, null)
-                                            }
-                                        } else {
-                                            statusMessage = "Please enter both Spotify email and password."
-                                            hasError = true
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(SPOTIFY_GREEN),
-                                        contentColor = Color.Black,
-                                    ),
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(46.dp)
-                                        .testTag("spotify_credentials_submit_button"),
-                                ) {
-                                    Text("Sign In with Spotify Credentials", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // Or Paste Spotify sp_dc Session Token
-                                Text(
-                                    text = "Or Session Token (sp_dc)",
-                                    color = Color(0xFFB0B0B0),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                OutlinedTextField(
-                                    value = spotifySpDc,
-                                    onValueChange = { spotifySpDc = it },
-                                    placeholder = { Text("Paste your 'sp_dc' cookie string…", color = Color(0xFF666666), fontSize = 13.sp) },
-                                    singleLine = false,
-                                    maxLines = 3,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("spotify_sp_dc_input"),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = Color(SPOTIFY_GREEN),
-                                        unfocusedBorderColor = Color(0xFF33333E),
-                                        focusedContainerColor = Color(0xFF101016),
-                                        unfocusedContainerColor = Color(0xFF101016),
-                                    ),
-                                    trailingIcon = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            if (spotifySpDc.isNotBlank()) {
-                                                IconButton(
-                                                    onClick = { spotifySpDc = "" },
-                                                    modifier = Modifier.size(28.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Close,
-                                                        contentDescription = "Clear",
-                                                        tint = Color.Gray,
-                                                        modifier = Modifier.size(16.dp),
-                                                    )
-                                                }
-                                            }
-                                            TextButton(
-                                                onClick = { pasteFromClipboard { spotifySpDc = it } },
-                                                modifier = Modifier.testTag("paste_spotify_sp_dc_button")
-                                            ) {
-                                                Text("Paste", color = Color(SPOTIFY_GREEN), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    },
-                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = {
-                                        focusManager.clearFocus()
-                                        executeSpotifyLogin(spotifySpDc)
-                                    })
-                                )
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // How to get sp_dc expander
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { showSpotifyGuide = !showSpotifyGuide }
-                                        .padding(vertical = 4.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = "Info",
-                                        tint = Color(0xFF888888),
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (showSpotifyGuide) "Hide token guide" else "How to obtain your Spotify sp_dc cookie",
-                                        color = Color(0xFF888888),
-                                        fontSize = 12.sp,
-                                    )
-                                }
-
-                                if (showSpotifyGuide) {
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(Color(0xFF0F0F14), RoundedCornerShape(8.dp))
-                                            .padding(10.dp)
-                                    ) {
-                                        Column {
-                                            Text("1. Open open.spotify.com in browser and log in.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                            Spacer(modifier = Modifier.height(3.dp))
-                                            Text("2. DevTools (F12) → Application → Cookies → open.spotify.com.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                            Spacer(modifier = Modifier.height(3.dp))
-                                            Text("3. Copy 'sp_dc' cookie value and paste it above.", color = Color(0xFFCCCCCC), fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                Button(
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        executeSpotifyLogin(spotifySpDc)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF242432),
-                                        contentColor = Color.White,
-                                    ),
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(46.dp)
-                                        .testTag("spotify_login_token_submit_button"),
-                                    enabled = !isProcessing,
-                                ) {
-                                    Text("Verify & Save Token", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                 }
                             }
                         }
@@ -1535,20 +1542,17 @@ fun SpotifyLoginScreen(navController: NavController) {
             }
 
             // PRIMARY ACTION: ENTER SEPOTIFY
-            val canProceed = isSpotifyLoggedIn
+            val canProceed = isSpotifyLoggedIn || SpotifySession.isGuestMode(context)
             Button(
                 onClick = {
-                    if (!isSpotifyLoggedIn) {
-                        selectedTab = 0
-                        hasError = true
-                        statusMessage = "Please log in to Spotify to proceed."
-                    } else {
-                        navigateToHome()
+                    if (!isSpotifyLoggedIn && !SpotifySession.isGuestMode(context)) {
+                        SpotifySession.setGuestMode(context, true)
                     }
+                    navigateToHome()
                 },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (canProceed) Color(SPOTIFY_GREEN) else Color(0xFF2E2E38),
-                    contentColor = if (canProceed) Color.Black else Color(0xFF888888),
+                    containerColor = Color(SPOTIFY_GREEN),
+                    contentColor = Color.Black,
                 ),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
@@ -1557,7 +1561,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                     .testTag("enter_app_button"),
             ) {
                 Text(
-                    text = if (isSpotifyLoggedIn) "Enter Sepotify" else "Log In to Continue",
+                    text = if (isSpotifyLoggedIn) "Enter Sepotify" else "Enter Sepotify (Instant Access)",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                 )
