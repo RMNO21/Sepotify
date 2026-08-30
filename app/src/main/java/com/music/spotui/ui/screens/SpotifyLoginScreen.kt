@@ -12,6 +12,7 @@ import android.os.Message
 import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -528,6 +529,32 @@ fun SpotifyLoginScreen(navController: NavController) {
 
                             Button(
                                 onClick = {
+                                    webViewRef?.loadUrl("https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F")
+                                    addDiagLog("INFO", "Navigating to accounts.spotify.com login")
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF242434)),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("accounts.spotify.com", fontSize = 10.sp, color = Color.White)
+                            }
+
+                            Button(
+                                onClick = {
+                                    webViewRef?.loadUrl("https://open.spotify.com")
+                                    addDiagLog("INFO", "Navigating to open.spotify.com")
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF242434)),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("open.spotify.com", fontSize = 10.sp, color = Color.White)
+                            }
+
+                            Button(
+                                onClick = {
                                     try {
                                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SpotifyAuth.LOGIN_URL)).apply {
                                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -679,7 +706,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                                     cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                                    // Configure WebSettings baseline for Spotify SPA
+                                    // Configure WebSettings baseline for Spotify SPA & reCAPTCHA Enterprise
                                     settings.apply {
                                         javaScriptEnabled = true
                                         domStorageEnabled = true
@@ -695,6 +722,10 @@ fun SpotifyLoginScreen(navController: NavController) {
                                         displayZoomControls = false
                                         allowFileAccess = true
                                         allowContentAccess = true
+                                        allowFileAccessFromFileURLs = true
+                                        allowUniversalAccessFromFileURLs = true
+                                        mediaPlaybackRequiresUserGesture = false
+                                        setGeolocationEnabled(true)
                                         cacheMode = WebSettings.LOAD_DEFAULT
                                         userAgentString = if (useDesktopUa) DESKTOP_UA else CHROME_MOBILE_UA
 
@@ -709,6 +740,15 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     }
 
                                     webChromeClient = object : WebChromeClient() {
+                                        override fun onPermissionRequest(request: PermissionRequest?) {
+                                            try {
+                                                addDiagLog("INFO", "Granting PermissionRequest: ${request?.resources?.joinToString()}")
+                                                request?.grant(request.resources)
+                                            } catch (e: Exception) {
+                                                addDiagLog("WARN", "PermissionRequest grant failed: ${e.message}")
+                                            }
+                                        }
+
                                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                             webProgress = (newProgress.coerceIn(5, 100)) / 100f
                                             isWebLoading = newProgress < 100
@@ -743,9 +783,21 @@ fun SpotifyLoginScreen(navController: NavController) {
                                                     javaScriptEnabled = true
                                                     domStorageEnabled = true
                                                     databaseEnabled = true
+                                                    allowFileAccess = true
+                                                    allowContentAccess = true
+                                                    allowFileAccessFromFileURLs = true
+                                                    allowUniversalAccessFromFileURLs = true
+                                                    mediaPlaybackRequiresUserGesture = false
                                                     userAgentString = if (useDesktopUa) DESKTOP_UA else CHROME_MOBILE_UA
                                                 }
                                                 cookieManager.setAcceptThirdPartyCookies(this, true)
+                                                webChromeClient = object : WebChromeClient() {
+                                                    override fun onPermissionRequest(request: PermissionRequest?) {
+                                                        try {
+                                                            request?.grant(request.resources)
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                }
                                                 webViewClient = object : WebViewClient() {
                                                     override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
                                                         req?.url?.toString()?.let { targetUrl ->
