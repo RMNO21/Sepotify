@@ -682,7 +682,7 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(460.dp)
+                            .height(480.dp)
                     ) {
                         AndroidView(
                             modifier = Modifier.fillMaxSize(),
@@ -692,7 +692,9 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
 
                                 WebView(ctx).apply {
                                     deezerWebViewRef = this
+                                    setBackgroundColor(android.graphics.Color.parseColor("#12101A"))
                                     cookieManager.setAcceptThirdPartyCookies(this, true)
+
                                     settings.apply {
                                         javaScriptEnabled = true
                                         domStorageEnabled = true
@@ -701,7 +703,12 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                                         useWideViewPort = true
                                         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                         javaScriptCanOpenWindowsAutomatically = true
-                                        setSupportMultipleWindows(false)
+                                        setSupportMultipleWindows(true)
+                                        setSupportZoom(true)
+                                        builtInZoomControls = false
+                                        displayZoomControls = false
+                                        allowFileAccess = false
+                                        allowContentAccess = true
                                         cacheMode = WebSettings.LOAD_DEFAULT
                                         userAgentString = CHROME_MOBILE_UA
                                     }
@@ -711,14 +718,57 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                                             webViewProgress = (newProgress.coerceIn(5, 100)) / 100f
                                             webViewLoading = newProgress < 100
                                         }
+
+                                        override fun onCreateWindow(
+                                            view: WebView?,
+                                            isDialog: Boolean,
+                                            isUserGesture: Boolean,
+                                            resultMsg: android.os.Message?
+                                        ): Boolean {
+                                            val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                            val tempWebView = WebView(ctx).apply {
+                                                webViewClient = object : WebViewClient() {
+                                                    override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                                        req?.url?.toString()?.let { targetUrl ->
+                                                            view?.loadUrl(targetUrl)
+                                                        }
+                                                        return true
+                                                    }
+                                                }
+                                            }
+                                            transport.webView = tempWebView
+                                            resultMsg.sendToTarget()
+                                            return true
+                                        }
                                     }
 
                                     webViewClient = object : WebViewClient() {
                                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                            val scheme = request?.url?.scheme?.lowercase() ?: ""
+                                            if (scheme != "http" && scheme != "https") {
+                                                cookieManager.flush()
+                                                val extractedArl = extractDeezerCookie(cookieManager, "arl")
+                                                if (!extractedArl.isNullOrBlank() && captured.compareAndSet(false, true)) {
+                                                    arlInput = extractedArl
+                                                    executeDeezerAuth(extractedArl)
+                                                }
+                                                return true
+                                            }
                                             return false
                                         }
 
+                                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                            super.onPageStarted(view, url, favicon)
+                                            cookieManager.flush()
+                                            val extractedArl = extractDeezerCookie(cookieManager, "arl")
+                                            if (!extractedArl.isNullOrBlank() && captured.compareAndSet(false, true)) {
+                                                arlInput = extractedArl
+                                                executeDeezerAuth(extractedArl)
+                                            }
+                                        }
+
                                         override fun onPageFinished(view: WebView?, url: String?) {
+                                            super.onPageFinished(view, url)
                                             webViewLoading = false
                                             cookieManager.flush()
                                             val extractedArl = extractDeezerCookie(cookieManager, "arl")
@@ -729,6 +779,7 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                                         }
 
                                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                            super.onReceivedError(view, request, error)
                                             if (request?.isForMainFrame == true) {
                                                 webViewLoading = false
                                             }

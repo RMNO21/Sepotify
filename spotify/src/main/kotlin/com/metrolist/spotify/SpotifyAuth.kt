@@ -29,15 +29,57 @@ object SpotifyAuth {
         "https://gist.githubusercontent.com/sonic-liberation/22ed9c6ba463899e933427f7de1f0eef/raw"
     private const val NUANCE_GIST_API_URL =
         "https://api.github.com/gists/22ed9c6ba463899e933427f7de1f0eef"
-    private const val USER_AGENT =
+    const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    const val DESKTOP_USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    const val MOBILE_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
-    // Updated LOGIN_URL to direct login page without URL encoding - allows WebView redirect handling
     const val LOGIN_URL =
+        "https://accounts.spotify.com/login"
+    const val DIRECT_LOGIN_URL =
         "https://accounts.spotify.com/en/login"
+    const val WEB_PLAYER_URL =
+        "https://open.spotify.com"
 
     // Direct entry to Spotify's web signup flow.
     const val SIGNUP_URL = "https://www.spotify.com/signup"
+
+    /**
+     * Generates a JavaScript snippet to inject username and password into Spotify's web login form
+     * and trigger the submission action safely.
+     */
+    fun getCredentialInjectionScript(username: String, password: String): String {
+        val safeUser = username.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "")
+        val safePass = password.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "")
+        return """
+            (function() {
+                try {
+                    var u = document.querySelector('input#login-username, input[data-testid="login-username"], input[type="text"], input[type="email"]');
+                    var p = document.querySelector('input#login-password, input[data-testid="login-password"], input[type="password"]');
+                    if (u) {
+                        u.value = '$safeUser';
+                        u.dispatchEvent(new Event('input', { bubbles: true }));
+                        u.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    if (p) {
+                        p.value = '$safePass';
+                        p.dispatchEvent(new Event('input', { bubbles: true }));
+                        p.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    setTimeout(function() {
+                        var btn = document.querySelector('button#login-button, button[data-testid="login-button"], button[type="submit"]');
+                        if (btn) {
+                            btn.click();
+                        }
+                    }, 250);
+                } catch(e) {
+                    console.error("Sepotify credential injection error:", e);
+                }
+            })();
+        """.trimIndent()
+    }
 
     private val FALLBACK_NUANCE = Nuance(
         s = "GM3TMMJTGYZTQNZVGM4DINJZHA4TGOBYGMZTCMRTGEYDSMJRHE4TEOBUG4YTCMRUGQ4DQOJUGQYTAMRRGA2TCMJSHE3TCMBY",

@@ -3,6 +3,7 @@ package com.music.spotui.ui.screens
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -619,16 +620,34 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         TextButton(
                                             onClick = {
+                                                val target = if (spotifyWebViewRef?.url?.contains("open.spotify.com") == true) {
+                                                    SpotifyAuth.LOGIN_URL
+                                                } else {
+                                                    SpotifyAuth.WEB_PLAYER_URL
+                                                }
+                                                spotifyWebViewRef?.loadUrl(target)
+                                            },
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text(
+                                                "Switch Portal",
+                                                color = Color(SPOTIFY_GREEN),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+
+                                        TextButton(
+                                            onClick = {
                                                 isSpotifyDesktopMode = !isSpotifyDesktopMode
                                                 spotifyWebViewRef?.settings?.userAgentString =
-                                                    if (isSpotifyDesktopMode) CHROME_DESKTOP_UA else CHROME_MOBILE_UA
+                                                    if (isSpotifyDesktopMode) SpotifyAuth.DESKTOP_USER_AGENT else CHROME_MOBILE_UA
                                                 spotifyWebViewRef?.reload()
                                             },
                                             modifier = Modifier.height(30.dp)
                                         ) {
                                             Text(
                                                 if (isSpotifyDesktopMode) "Mobile" else "Desktop",
-                                                color = Color(SPOTIFY_GREEN),
+                                                color = Color.LightGray,
                                                 fontSize = 11.sp
                                             )
                                         }
@@ -661,7 +680,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(460.dp)
+                                        .height(480.dp)
                                 ) {
                                     AndroidView(
                                         modifier = Modifier.fillMaxSize(),
@@ -671,18 +690,31 @@ fun SpotifyLoginScreen(navController: NavController) {
 
                                             WebView(ctx).apply {
                                                 spotifyWebViewRef = this
+                                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                                setBackgroundColor(android.graphics.Color.parseColor("#121212"))
                                                 cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                                                try {
+                                                    WebView.setWebContentsDebuggingEnabled(true)
+                                                } catch (_: Throwable) {}
+
                                                 settings.apply {
                                                     javaScriptEnabled = true
                                                     domStorageEnabled = true
                                                     databaseEnabled = true
+                                                    loadsImagesAutomatically = true
                                                     loadWithOverviewMode = true
                                                     useWideViewPort = true
                                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                                     javaScriptCanOpenWindowsAutomatically = true
-                                                    setSupportMultipleWindows(false)
+                                                    setSupportMultipleWindows(true)
+                                                    setSupportZoom(false)
+                                                    builtInZoomControls = false
+                                                    displayZoomControls = false
+                                                    allowFileAccess = false
+                                                    allowContentAccess = true
                                                     cacheMode = WebSettings.LOAD_DEFAULT
-                                                    userAgentString = if (isSpotifyDesktopMode) CHROME_DESKTOP_UA else CHROME_MOBILE_UA
+                                                    userAgentString = if (isSpotifyDesktopMode) SpotifyAuth.DESKTOP_USER_AGENT else CHROME_MOBILE_UA
                                                 }
 
                                                 webChromeClient = object : WebChromeClient() {
@@ -690,14 +722,67 @@ fun SpotifyLoginScreen(navController: NavController) {
                                                         spotifyWebProgress = (newProgress.coerceIn(5, 100)) / 100f
                                                         spotifyWebLoading = newProgress < 100
                                                     }
+
+                                                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                                        consoleMessage?.let {
+                                                            Timber.d("[Spotify WebView JS] ${it.message()} -- line ${it.lineNumber()}")
+                                                        }
+                                                        return true
+                                                    }
+
+                                                    override fun onCreateWindow(
+                                                        view: WebView?,
+                                                        isDialog: Boolean,
+                                                        isUserGesture: Boolean,
+                                                        resultMsg: android.os.Message?
+                                                    ): Boolean {
+                                                        val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                                        val tempWebView = WebView(ctx).apply {
+                                                            webViewClient = object : WebViewClient() {
+                                                                override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                                                    req?.url?.toString()?.let { targetUrl ->
+                                                                        view?.loadUrl(targetUrl)
+                                                                    }
+                                                                    return true
+                                                                }
+                                                            }
+                                                        }
+                                                        transport.webView = tempWebView
+                                                        resultMsg.sendToTarget()
+                                                        return true
+                                                    }
                                                 }
 
                                                 webViewClient = object : WebViewClient() {
                                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                                        val urlStr = request?.url?.toString() ?: ""
+                                                        val scheme = request?.url?.scheme?.lowercase() ?: ""
+
+                                                        // Intercept custom app schemes (like spotify://, intent://) to prevent ERR_UNKNOWN_URL_SCHEME
+                                                        if (scheme != "http" && scheme != "https") {
+                                                            cookieManager.flush()
+                                                            val spDc = extractCookie(cookieManager, "sp_dc")
+                                                            if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                                spotifySpDc = spDc
+                                                                executeSpotifyLogin(spDc)
+                                                            }
+                                                            return true
+                                                        }
                                                         return false
                                                     }
 
+                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                                        super.onPageStarted(view, url, favicon)
+                                                        cookieManager.flush()
+                                                        val spDc = extractCookie(cookieManager, "sp_dc")
+                                                        if (!spDc.isNullOrBlank() && spotifyTokenExtracted.compareAndSet(false, true)) {
+                                                            spotifySpDc = spDc
+                                                            executeSpotifyLogin(spDc)
+                                                        }
+                                                    }
+
                                                     override fun onPageFinished(view: WebView?, url: String?) {
+                                                        super.onPageFinished(view, url)
                                                         spotifyWebLoading = false
                                                         cookieManager.flush()
                                                         val spDc = extractCookie(cookieManager, "sp_dc")
@@ -708,6 +793,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                                                     }
 
                                                     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                                        super.onReceivedError(view, request, error)
                                                         if (request?.isForMainFrame == true) {
                                                             spotifyWebLoading = false
                                                         }
@@ -795,21 +881,13 @@ fun SpotifyLoginScreen(navController: NavController) {
                                     keyboardActions = KeyboardActions(onDone = {
                                         focusManager.clearFocus()
                                         if (spotifyEmail.isNotBlank() && spotifyPassword.isNotBlank()) {
-                                            // Switch to interactive web tab and inject credentials
                                             spotifyLoginMode = 0
-                                            spotifyWebViewRef?.evaluateJavascript(
-                                                """
-                                                (function() {
-                                                    var u = document.querySelector('input#login-username, input[data-testid="login-username"]');
-                                                    var p = document.querySelector('input#login-password, input[data-testid="login-password"]');
-                                                    if (u) { u.value = '${spotifyEmail.replace("'", "\\'")}'; u.dispatchEvent(new Event('input', {bubbles: true})); }
-                                                    if (p) { p.value = '${spotifyPassword.replace("'", "\\'")}'; p.dispatchEvent(new Event('input', {bubbles: true})); }
-                                                    var btn = document.querySelector('button#login-button, button[data-testid="login-button"]');
-                                                    if (btn) btn.click();
-                                                })();
-                                                """.trimIndent(),
-                                                null
-                                            )
+                                            val js = SpotifyAuth.getCredentialInjectionScript(spotifyEmail, spotifyPassword)
+                                            spotifyWebViewRef?.evaluateJavascript(js, null)
+                                            scope.launch {
+                                                delay(800)
+                                                spotifyWebViewRef?.evaluateJavascript(js, null)
+                                            }
                                         }
                                     })
                                 )
@@ -821,19 +899,12 @@ fun SpotifyLoginScreen(navController: NavController) {
                                         focusManager.clearFocus()
                                         if (spotifyEmail.isNotBlank() && spotifyPassword.isNotBlank()) {
                                             spotifyLoginMode = 0
-                                            spotifyWebViewRef?.evaluateJavascript(
-                                                """
-                                                (function() {
-                                                    var u = document.querySelector('input#login-username, input[data-testid="login-username"]');
-                                                    var p = document.querySelector('input#login-password, input[data-testid="login-password"]');
-                                                    if (u) { u.value = '${spotifyEmail.replace("'", "\\'")}'; u.dispatchEvent(new Event('input', {bubbles: true})); }
-                                                    if (p) { p.value = '${spotifyPassword.replace("'", "\\'")}'; p.dispatchEvent(new Event('input', {bubbles: true})); }
-                                                    var btn = document.querySelector('button#login-button, button[data-testid="login-button"]');
-                                                    if (btn) btn.click();
-                                                })();
-                                                """.trimIndent(),
-                                                null
-                                            )
+                                            val js = SpotifyAuth.getCredentialInjectionScript(spotifyEmail, spotifyPassword)
+                                            spotifyWebViewRef?.evaluateJavascript(js, null)
+                                            scope.launch {
+                                                delay(800)
+                                                spotifyWebViewRef?.evaluateJavascript(js, null)
+                                            }
                                         } else {
                                             statusMessage = "Please enter both Spotify email and password."
                                             hasError = true
