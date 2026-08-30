@@ -180,6 +180,8 @@ fun isSongDownloaded(context: Context, song: SongsModel): Boolean {
     if (song.url.isNotBlank() && downloadedPathForQuery(context, song.url) != null) return true
     if (song.spotifyTrackId.isNotBlank() && downloadedPathForQuery(context, "spotify:track:${song.spotifyTrackId}|${song.title} ${song.singer}") != null) return true
     if (downloadedPathForQuery(context, "${song.title} ${song.singer}") != null) return true
+    if (song.title.isNotBlank() && downloadedPathForQuery(context, song.title) != null) return true
+    if (song.id > 0 && downloadedPathForQuery(context, song.id.toString()) != null) return true
     return false
 }
 
@@ -256,12 +258,30 @@ fun getDownloadedAlbums(context: Context): List<AlbumsModel> {
  */
 fun downloadedPathForQuery(context: Context, query: String): String? {
     if (query.isBlank()) return null
+
+    // 0. Direct File / URI path
+    if (query.startsWith("/") || query.startsWith("file://")) {
+        val path = query.removePrefix("file://")
+        val f = File(path)
+        if (f.exists() && f.length() >= 1024L) return f.absolutePath
+    }
+
     val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+
+    // Direct key lookup (e.g. song.id.toString())
+    prefs.getString(query, null)?.let { json ->
+        parseMeta(json)?.filePath?.takeIf { it.isNotBlank() && File(it).exists() && File(it).length() >= 1024L }?.let {
+            return it
+        }
+    }
+
     val metas = prefs.all.values.mapNotNull { (it as? String)?.let(::parseMeta) }
 
-    // 1. Direct song.url exact match
+    // 1. Direct song.url exact match or ID match
     for (m in metas) {
-        if (m.song.url == query && m.filePath.isNotBlank() && File(m.filePath).exists()) {
+        if ((m.song.url == query || m.song.id.toString() == query || m.filePath == query) &&
+            m.filePath.isNotBlank() && File(m.filePath).exists() && File(m.filePath).length() >= 1024L
+        ) {
             return m.filePath
         }
     }
@@ -271,13 +291,17 @@ fun downloadedPathForQuery(context: Context, query: String): String? {
         query.removePrefix("spotify:track:").substringBefore('|').trim()
     } else if (query.contains('|') && query.substringBefore('|').matches(Regex("""[A-Za-z0-9]{22}"""))) {
         query.substringBefore('|').trim()
+    } else if (query.matches(Regex("""[A-Za-z0-9]{22}"""))) {
+        query.trim()
     } else {
         null
     }
 
     if (spotifyId != null) {
         for (m in metas) {
-            if (m.song.spotifyTrackId == spotifyId && m.filePath.isNotBlank() && File(m.filePath).exists()) {
+            if (m.song.spotifyTrackId == spotifyId && m.filePath.isNotBlank() &&
+                File(m.filePath).exists() && File(m.filePath).length() >= 1024L
+            ) {
                 return m.filePath
             }
         }
@@ -293,18 +317,51 @@ fun downloadedPathForQuery(context: Context, query: String): String? {
             val songNormRev = normalizeStr("${m.song.singer} ${m.song.title}")
             val titleNorm = normalizeStr(m.song.title)
             val singerNorm = normalizeStr(m.song.singer)
-            if (m.filePath.isNotBlank() && File(m.filePath).exists()) {
+            if (m.filePath.isNotBlank() && File(m.filePath).exists() && File(m.filePath).length() >= 1024L) {
                 if (normQ == songNorm || normQ == songNormRev) {
                     return m.filePath
                 }
                 if (titleNorm.isNotBlank() && singerNorm.isNotBlank() &&
-                    normQ.contains(titleNorm) && normQ.contains(singerNorm)
+                    (normQ.contains(titleNorm) && normQ.contains(singerNorm) || songNorm.contains(normQ))
                 ) {
+                    return m.filePath
+                }
+                if (titleNorm.isNotBlank() && normQ == titleNorm) {
                     return m.filePath
                 }
             }
         }
     }
+
+    // 4. Check Room DB localPath
+    try {
+        val db = com.music.spotui.data.db.AppDatabase.getInstance(context)
+        val trackKey = if (query.startsWith("spotify:track:")) query.removePrefix("spotify:track:").substringBefore('|').trim() else query
+        val entity = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+            db.trackDao().getTrack(trackKey)
+        }
+        if (entity != null && !entity.localPath.isNullOrBlank()) {
+            val dbFile = File(entity.localPath)
+            if (dbFile.exists() && dbFile.length() >= 1024L) {
+                return dbFile.absolutePath
+            }
+        }
+    } catch (_: Throwable) {}
+
+    // 5. Direct search in downloads directory
+    try {
+        val downloadsDir = com.music.spotui.data.storage.OfflineStorageManager.getDownloadsDir(context)
+        val cleanName = normalizeStr(cleanQ)
+        if (cleanName.isNotBlank() && downloadsDir.exists()) {
+            val allFiles = downloadsDir.walkTopDown().filter { it.isFile && it.length() >= 1024L }
+            for (f in allFiles) {
+                val fNameNorm = normalizeStr(f.nameWithoutExtension)
+                if (fNameNorm == cleanName || (cleanName.length > 4 && fNameNorm.contains(cleanName))) {
+                    return f.absolutePath
+                }
+            }
+        }
+    } catch (_: Throwable) {}
 
     return null
 }

@@ -333,6 +333,9 @@ object SongPlayer {
     }
 
 
+    @Volatile private var consecutiveFailures = 0
+    @Volatile private var lastSkipTimestamp = 0L
+
     fun playSong(song: String, context: Context) {
         val appContext = context.applicationContext
         appCtx = appContext
@@ -365,8 +368,19 @@ object SongPlayer {
         }
 
         // Downloaded tracks ALWAYS play the local file — instantly with 0ms delay!
-        val downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, song)
+        var downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, song)
+        if (downloadedPath == null && song.startsWith(SPOTIFY_TRACK_PREFIX)) {
+            val spotifyId = song.removePrefix(SPOTIFY_TRACK_PREFIX).substringBefore('|').trim()
+            downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, spotifyId)
+        }
+        if (downloadedPath == null && metadataRegistry[song] != null) {
+            val meta = metadataRegistry[song]!!
+            downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, "${meta.title} ${meta.artist}")
+                ?: com.music.spotui.data.preferences.downloadedPathForQuery(appContext, meta.title)
+        }
+
         if (downloadedPath != null && java.io.File(downloadedPath).exists()) {
+            consecutiveFailures = 0
             currentSource = "Downloaded"
             currentQuality = downloadedPath.substringAfterLast('.', "").uppercase()
             _playbackStatus.value = PlaybackStatus.Playing("Downloaded", currentQuality)
@@ -411,29 +425,46 @@ object SongPlayer {
         scope.launch {
             try {
                 val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(appContext)
-                // In offline mode, check if the track is downloaded. If not, auto-skip!
+                // In offline mode, check if the track is downloaded. If not, auto-skip safely!
                 if (!isOnline) {
-                    val downloadedPath = com.music.spotui.data.preferences.downloadedPathForQuery(appContext, song)
-                    if (downloadedPath == null) {
+                    consecutiveFailures++
+                    if (consecutiveFailures >= 3) {
+                        consecutiveFailures = 0
+                        _playbackStatus.value = PlaybackStatus.Idle
                         withContext(Dispatchers.Main) {
-                            showShortToast(appContext, "You are not connected to the internet")
-                            skipToNextTrack(appContext)
+                            showShortToast(appContext, "You are offline and no more downloaded tracks are available")
                         }
                         return@launch
                     }
+                    withContext(Dispatchers.Main) {
+                        showShortToast(appContext, "Track not downloaded")
+                        kotlinx.coroutines.delay(350L)
+                        skipToNextTrack(appContext)
+                    }
+                    return@launch
                 }
 
                 val streamUrl = resolveStreamUrl(song, appContext, forPlayback = true) ?: run {
+                    consecutiveFailures++
                     _playbackStatus.value = PlaybackStatus.Error("Playback failed", canRetry = true)
+                    if (consecutiveFailures >= 3) {
+                        consecutiveFailures = 0
+                        withContext(Dispatchers.Main) {
+                            showShortToast(appContext, "Could not stream track. Please check connection.")
+                        }
+                        return@launch
+                    }
                     if (currentRequest == song) withContext(Dispatchers.Main) {
-                        val msg = if (!isOnline) "You are not connected to the internet" else "No playback found for this track"
+                        val msg = "No playback found for this track"
                         showShortToast(appContext, msg)
+                        kotlinx.coroutines.delay(400L)
                         skipToNextTrack(appContext)
                     }
                     return@launch
                 }
                 // A newer tap superseded this one while we were resolving — drop it.
                 if (currentRequest != song) return@launch
+                consecutiveFailures = 0
                 val effectivePlaybackUrl = streamUrl
                 withContext(Dispatchers.Main) {
                     if (currentRequest != song) return@withContext
@@ -452,10 +483,16 @@ object SongPlayer {
                 prefetchNextTracks(appContext, 3)
             } catch (e: Exception) {
                 Log.e(TAG, "playSong failed for query: $song", e)
+                consecutiveFailures++
                 _playbackStatus.value = PlaybackStatus.Error("Playback error", canRetry = true)
-                withContext(Dispatchers.Main) {
-                    showShortToast(appContext, "No playback found for this track")
-                    skipToNextTrack(appContext)
+                if (consecutiveFailures < 3) {
+                    withContext(Dispatchers.Main) {
+                        showShortToast(appContext, "No playback found for this track")
+                        kotlinx.coroutines.delay(400L)
+                        skipToNextTrack(appContext)
+                    }
+                } else {
+                    consecutiveFailures = 0
                 }
             }
         }
@@ -472,6 +509,12 @@ object SongPlayer {
         val q = state.queue.value
         if (q.isEmpty()) return
         val curIdx = state.songIndex.value
+
+        val now = System.currentTimeMillis()
+        if (now - lastSkipTimestamp < 250L) {
+            return
+        }
+        lastSkipTimestamp = now
 
         // If repeat is ON and this was called from track completion (not manual user skip), repeat the same track
         if (state.repeat.value && !forceNextIfRepeat) {
@@ -495,6 +538,10 @@ object SongPlayer {
                 } else {
                     targetIndex = availableOffline.firstOrNull { it > curIdx } ?: availableOffline.first()
                 }
+            } else {
+                showShortToast(context, "No offline tracks available in queue")
+                _playbackStatus.value = PlaybackStatus.Idle
+                return
             }
         } else {
             if (isShuffle && q.size > 1) {
@@ -515,6 +562,7 @@ object SongPlayer {
             playSong(next.url, context)
         } else if (!isOnline) {
             showShortToast(context, "No offline tracks available in queue")
+            _playbackStatus.value = PlaybackStatus.Idle
         }
     }
 
@@ -2186,6 +2234,7 @@ object SongPlayer {
                             }
                         }
                         androidx.media3.common.Player.STATE_READY -> {
+                            consecutiveFailures = 0
                             if (p.playWhenReady) {
                                 _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
                             } else {
@@ -2481,7 +2530,7 @@ object SongPlayer {
                 if (!playing) continue
                 val dur = withContext(Dispatchers.Main) { p.duration }
                 val pos = withContext(Dispatchers.Main) { p.currentPosition }
-                if (dur <= 0 || pos < 0) continue
+                if (dur <= 10_000L || pos < 3000L) continue
 
                 // Audio Scrobbling Engine update
                 com.music.spotui.data.scrobble.ScrobblerEngine.onPlaybackProgress(ctx, pos)
@@ -2497,7 +2546,8 @@ object SongPlayer {
                 if (crossfadeMs <= 0) continue
                 val state = boundState ?: continue
                 if (state.repeat.value) continue // repeat-one loops the same track
-                if (pos >= dur - crossfadeMs) {
+                val remainingMs = dur - pos
+                if (remainingMs in 1..crossfadeMs && pos >= minOf(5000L, dur / 2)) {
                     triggerCrossfade(ctx, crossfadeMs)
                 }
             }
@@ -2552,6 +2602,7 @@ object SongPlayer {
         if (cur < 0 || cur >= q.size - 1) return // last track ends normally
         val nextSong = q[cur + 1]
         isCrossfading = true
+        currentRequest = nextSong.url
         scope.launch {
             try {
                 val nextUrl = resolveStreamUrl(nextSong.url, ctx, forPlayback = true) ?: run {
@@ -2648,6 +2699,8 @@ object SongPlayer {
             incoming.setHandleAudioBecomingNoisy(true)
             runCatching { old?.stop(); old?.release() }
             isCrossfading = false
+            hasPreloadedCurrentTrack = false
+            consecutiveFailures = 0
             // Re-bind the media session to the new player.
             onPlayerSwapped?.invoke(incoming)
         }
