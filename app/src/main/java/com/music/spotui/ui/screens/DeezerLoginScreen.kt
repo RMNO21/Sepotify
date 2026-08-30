@@ -9,6 +9,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -143,20 +144,21 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
         }
     }
 
+    val isOnboarding = next == "home" || next == "onboarding"
+
     fun completeAndNavigate() {
-        if (next == "home" || next == "onboarding") {
-            if (com.music.spotui.data.preferences.hasSpotiflacSession(context)) {
-                navController.navigate(Routes.Home.route) {
-                    popUpTo(Routes.DeezerLogin.route) { inclusive = true }
-                }
-            } else {
-                navController.navigate("${Routes.SpotiflacVerify.route}?next=onboarding") {
-                    popUpTo(Routes.DeezerLogin.route) { inclusive = true }
-                }
+        if (isOnboarding) {
+            navController.navigate(Routes.Home.route) {
+                popUpTo(Routes.DeezerLogin.route) { inclusive = true }
             }
         } else {
             navController.popBackStack()
         }
+    }
+
+    BackHandler(enabled = isOnboarding && !isConnected) {
+        statusMessage = "Deezer login is required to use the app."
+        hasError = true
     }
 
     fun executeDeezerAuth(cleanArl: String) {
@@ -229,17 +231,19 @@ fun DeezerLoginScreen(navController: NavController, next: String = "") {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
-                    onClick = { navController.popBackStack() },
-                    modifier = Modifier.testTag("deezer_login_back_button"),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                    )
+                if (!isOnboarding || isConnected) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.testTag("deezer_login_back_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Deezer HiFi Connection",
                     color = Color.White,

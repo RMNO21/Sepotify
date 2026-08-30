@@ -57,8 +57,15 @@ fun MyNavHost(
 
     val context = LocalContext.current
     val hasSpotify = SpotifySession.spDc(context).isNotBlank()
+    val hasDeezer = !com.music.spotui.data.preferences.getDeezerArl(context).isNullOrBlank()
 
-    val startDestination = if (!hasSpotify) Routes.Login.route else Routes.Home.route
+    val startDestination = if (!hasSpotify) {
+        Routes.Login.route
+    } else if (!hasDeezer) {
+        "${Routes.DeezerLogin.route}?next=home"
+    } else {
+        Routes.Home.route
+    }
 
     // Restore the last session: put the track back into the mini player (paused)
     // and arm the player to resume from the saved position on the first play tap.

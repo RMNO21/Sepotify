@@ -133,6 +133,10 @@ dependencies {
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    //Chrome Custom Tabs & Webkit
+    implementation("androidx.browser:browser:1.8.0")
+    implementation("androidx.webkit:webkit:1.11.0")
+
     //core library desugaring (required by :innertube)
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 }
