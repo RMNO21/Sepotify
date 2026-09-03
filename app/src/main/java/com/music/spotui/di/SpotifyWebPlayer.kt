@@ -90,6 +90,10 @@ object SpotifyWebPlayer {
     @SuppressLint("SetJavaScriptEnabled")
     fun attach(activity: Activity) {
         if (webView != null) return
+        if (!SongPlayer.webPlayerEnabled || !com.music.spotui.data.preferences.isWebPlaybackEnabled(activity)) {
+            Log.d(TAG, "attach: web playback is disabled; skipping WebView initialization")
+            return
+        }
         try {
             // Lets `chrome://inspect` attach to the hidden player for diagnosis.
             WebView.setWebContentsDebuggingEnabled(true)
@@ -214,6 +218,9 @@ object SpotifyWebPlayer {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
             )
+            wv.alpha = 0.001f
+            wv.isClickable = false
+            wv.isFocusable = false
             activity.addContentView(wv, params)
             wv.post { wv.translationX = wv.width.toFloat() + 2000f }
             wv.loadUrl("https://open.spotify.com/")

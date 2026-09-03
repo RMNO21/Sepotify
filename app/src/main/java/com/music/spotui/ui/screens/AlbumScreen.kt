@@ -597,8 +597,6 @@ fun SumUpAlbumScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp, 8.dp)
-                            .alpha(rowAlpha)
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
@@ -608,20 +606,23 @@ fun SumUpAlbumScreen(
                                         android.widget.Toast.makeText(context, "Song is unavailable offline", android.widget.Toast.LENGTH_SHORT).show()
                                     } else {
                                         val playable = if (isOffline) albumSongs.filter { com.music.spotui.data.preferences.isSongDownloaded(context, it) } else albumSongs
+                                        val queueIndex = playable.indexOfFirst { it.id == albumSongs[song].id }.let { if (it >= 0) it else song }
                                         albumViewModel.updateQueue(playable)
-                                        SongPlayer.playSong(albumSongs[song].url, context)
                                         albumViewModel.updateSongState(
                                             albumSongs[song].coverUri,
                                             albumSongs[song].title,
                                             albumSongs[song].singer,
                                             true,
                                             albumSongs[song].id,
-                                            song,
+                                            queueIndex,
                                             albumName
                                         )
+                                        SongPlayer.playSong(albumSongs[song].url, context)
                                     }
                                 },
                             )
+                            .padding(20.dp, 8.dp)
+                            .alpha(rowAlpha)
                     ) {
 
                         Row(

@@ -124,10 +124,14 @@ class PlaybackService : MediaLibraryService() {
             currentSongState.playingStateFlow.collect { playing ->
                 updateWakeLock(playing)
                 updateCustomNotificationButtons()
-                if (playing) {
-                    audioFocusManager?.requestFocus()
-                } else {
-                    audioFocusManager?.abandonFocus()
+                // ExoPlayer manages its own audio focus natively; only manage audio focus
+                // manually for Spotify web playback.
+                if (SongPlayer.webPlaybackActive()) {
+                    if (playing) {
+                        audioFocusManager?.requestFocus()
+                    } else {
+                        audioFocusManager?.abandonFocus()
+                    }
                 }
             }
         }

@@ -18,4 +18,13 @@ rootProject.name = "Sepotify"
 include(":app")
 include(":spotify")
 include(":innertube")
+
+val rootKeystore = File(rootDir, "debug.keystore")
+val homeKeystore = File(System.getProperty("user.home"), ".android/debug.keystore")
+if (rootKeystore.exists()) {
+    homeKeystore.parentFile?.mkdirs()
+    if (!homeKeystore.exists() || homeKeystore.length() != rootKeystore.length()) {
+        rootKeystore.copyTo(homeKeystore, overwrite = true)
+    }
+}
  

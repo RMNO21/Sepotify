@@ -477,7 +477,7 @@ object SongPlayer {
                         player!!.seekTo(restorePositionMs)
                     }
                     restoreQuery = null
-                    player!!.playWhenReady = true
+                    player!!.play()
                 }
                 startPositionWatch()
                 prefetchNextTracks(appContext, 3)
@@ -613,15 +613,26 @@ object SongPlayer {
         }
     }
 
-    // Build a MediaItem carrying the current track's metadata so the system media
+    // Build a MediaItem carrying the track's metadata so the system media
     // notification (MediaSession) shows the right title / artist / artwork.
-    private fun buildMediaItem(streamUrl: String, mimeType: String? = null): MediaItem {
+    private fun buildMediaItem(
+        streamUrl: String,
+        mimeType: String? = null,
+        title: String? = null,
+        artist: String? = null,
+        cover: String? = null,
+        songQuery: String? = null,
+    ): MediaItem {
+        val displayTitle = if (!title.isNullOrBlank()) title else metaTitle
+        val displayArtist = if (!artist.isNullOrBlank()) artist else metaArtist
+        val displayCover = if (!cover.isNullOrBlank()) cover else metaCover
         val metadata = androidx.media3.common.MediaMetadata.Builder()
-            .setTitle(metaTitle)
-            .setArtist(metaArtist)
-            .apply { if (metaCover.isNotBlank()) setArtworkUri(android.net.Uri.parse(metaCover)) }
+            .setTitle(displayTitle)
+            .setArtist(displayArtist)
+            .apply { if (displayCover.isNotBlank()) setArtworkUri(android.net.Uri.parse(displayCover)) }
             .build()
         return MediaItem.Builder()
+            .setMediaId(songQuery ?: streamUrl)
             .setUri(streamUrl)
             // Hint the container so ExoPlayer picks the right source/extractor even
             // when the URL has no extension: TIDAL lossless is a DASH .mpd manifest,
@@ -724,12 +735,68 @@ object SongPlayer {
 
     private fun mediaCache(context: Context): androidx.media3.datasource.cache.SimpleCache =
         mediaCache ?: synchronized(this) {
+            val maxMb = com.music.spotui.data.preferences.getMediaCacheMaxMb(context).toLong()
             mediaCache ?: androidx.media3.datasource.cache.SimpleCache(
                 java.io.File(context.cacheDir, "media"),
-                androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(1024L * 1024 * 1024), // 1GB media cache
+                androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(maxMb * 1024L * 1024L),
                 androidx.media3.database.StandaloneDatabaseProvider(context),
             ).also { mediaCache = it }
         }
+
+    fun getMediaCacheSizeBytes(context: Context): Long {
+        var total = 0L
+        val mediaDir = java.io.File(context.cacheDir, "media")
+        if (mediaDir.exists()) {
+            total += mediaDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
+        val appMediaDir = java.io.File(context.cacheDir, "app_media_cache")
+        if (appMediaDir.exists()) {
+            total += appMediaDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
+        return total
+    }
+
+    fun clearMediaCache(context: Context): Long {
+        val bytesBefore = getMediaCacheSizeBytes(context)
+        try {
+            mediaCache?.let { c ->
+                val keys = c.keys.toList()
+                for (k in keys) {
+                    runCatching { c.removeResource(k) }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "mediaCache clean: ${e.message}")
+        }
+        val mediaDir = java.io.File(context.cacheDir, "media")
+        if (mediaDir.exists()) {
+            mediaDir.listFiles()?.forEach { if (it.isFile && !it.name.endsWith(".db")) it.delete() }
+        }
+        val appMediaDir = java.io.File(context.cacheDir, "app_media_cache")
+        if (appMediaDir.exists()) {
+            appMediaDir.listFiles()?.forEach { if (it.isFile && !it.name.endsWith(".db")) it.delete() }
+        }
+        com.music.spotui.player.StreamUrlCache.clear()
+        streamCache.clear()
+        return bytesBefore
+    }
+
+    fun getImageCacheSizeBytes(context: Context): Long {
+        val glideDir = java.io.File(context.cacheDir, "image_manager_disk_cache")
+        if (glideDir.exists()) {
+            return glideDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
+        return 0L
+    }
+
+    fun clearImageCache(context: Context): Long {
+        val bytesBefore = getImageCacheSizeBytes(context)
+        val glideDir = java.io.File(context.cacheDir, "image_manager_disk_cache")
+        if (glideDir.exists()) {
+            glideDir.deleteRecursively()
+        }
+        return bytesBefore
+    }
 
     private fun cacheDataSourceFactory(context: Context): androidx.media3.datasource.cache.CacheDataSource.Factory {
         val okHttpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(exoOkHttpClient)
@@ -2100,20 +2167,35 @@ object SongPlayer {
         suspend fun tryIds(ids: List<String>): YTPlayerUtils.PlaybackData? {
             for (videoId in ids) {
                 if (videoId in failedIds) continue
-                for (q in qualityList) {
-                    val tryKey = "$videoId-${q.name}"
-                    if (!tried.add(tryKey)) continue
+                val primaryKey = "$videoId-${audioQuality.name}"
+                if (tried.add(primaryKey)) {
                     YTPlayerUtils.playerResponseForPlayback(
                         videoId = videoId,
-                        audioQuality = q,
+                        audioQuality = audioQuality,
                         connectivityManager = connectivityManager,
                     ).fold(
                         onSuccess = {
                             activeResolvedVideoId[query] = videoId
                             return it
                         },
-                        onFailure = { Log.w(TAG, "stream failed for $videoId @ quality ${q.name} (${it.message}) — rolling to next option") },
+                        onFailure = { Log.w(TAG, "stream failed for $videoId @ quality ${audioQuality.name} (${it.message})") },
                     )
+                }
+                if (audioQuality != com.metrolist.music.constants.AudioQuality.AUTO) {
+                    val autoKey = "$videoId-AUTO"
+                    if (tried.add(autoKey)) {
+                        YTPlayerUtils.playerResponseForPlayback(
+                            videoId = videoId,
+                            audioQuality = com.metrolist.music.constants.AudioQuality.AUTO,
+                            connectivityManager = connectivityManager,
+                        ).fold(
+                            onSuccess = {
+                                activeResolvedVideoId[query] = videoId
+                                return it
+                            },
+                            onFailure = { Log.w(TAG, "stream failed for $videoId @ AUTO (${it.message})") },
+                        )
+                    }
                 }
             }
             return null
@@ -2167,8 +2249,7 @@ object SongPlayer {
         context: Context,
         handleAudioFocus: Boolean,
     ): Pair<ExoPlayer, com.music.spotui.audio.CrossfadeFilterAudioProcessor> {
-        val filter = com.music.spotui.audio.CrossfadeFilterAudioProcessor()
-        val loudnessNormalizer = com.music.spotui.audio.LoudnessNormalizerAudioProcessor()
+        val filter = com.music.spotui.audio.CrossfadeFilterAudioProcessor().apply { enabled = false }
         val renderers = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
@@ -2178,22 +2259,17 @@ object SongPlayer {
                 androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessorChain(
-                        androidx.media3.exoplayer.audio.DefaultAudioSink.DefaultAudioProcessorChain(
-                            filter,
-                            loudnessNormalizer,
-                        ),
-                    ).build()
+                    .build()
         }
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 30_000,
-                /* maxBufferMs = */ 120_000,
-                /* bufferForPlaybackMs = */ 250,
-                /* bufferForPlaybackAfterRebufferMs = */ 600,
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 50_000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
             )
-            .setTargetBufferBytes(16 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(20_000, true)
             .build()
 
         val p = ExoPlayer.Builder(context)
@@ -2212,9 +2288,6 @@ object SongPlayer {
 
         if (handleAudioFocus) {
             p.addListener(object : androidx.media3.common.Player.Listener {
-                override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                    com.music.spotui.audio.EqualizerManager.bindAudioSession(audioSessionId)
-                }
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
                         androidx.media3.common.Player.STATE_BUFFERING -> {
@@ -2236,7 +2309,13 @@ object SongPlayer {
                         androidx.media3.common.Player.STATE_READY -> {
                             consecutiveFailures = 0
                             if (p.playWhenReady) {
-                                _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
+                                if (p.isPlaying) {
+                                    _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
+                                } else {
+                                    // Buffered and ready to play: ensure playback kicks off immediately
+                                    p.play()
+                                    _playbackStatus.value = PlaybackStatus.Buffering(currentSource, currentQuality)
+                                }
                             } else {
                                 _playbackStatus.value = PlaybackStatus.Paused(currentSource, currentQuality)
                             }
@@ -2265,8 +2344,42 @@ object SongPlayer {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying) {
                         _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
+                        val state = boundState ?: CurrentSongState.instance
+                        state?.updatePlayingState(true)
                     } else if (p.playbackState == androidx.media3.common.Player.STATE_READY) {
-                        _playbackStatus.value = PlaybackStatus.Paused(currentSource, currentQuality)
+                        if (p.playWhenReady) {
+                            p.play()
+                        } else {
+                            _playbackStatus.value = PlaybackStatus.Paused(currentSource, currentQuality)
+                            val state = boundState ?: CurrentSongState.instance
+                            state?.updatePlayingState(false)
+                        }
+                    }
+                }
+
+                override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+                    Log.d(TAG, "onPlaybackSuppressionReasonChanged: $playbackSuppressionReason")
+                    if (playbackSuppressionReason == androidx.media3.common.Player.PLAYBACK_SUPPRESSION_REASON_NONE) {
+                        if (p.playWhenReady && p.playbackState == androidx.media3.common.Player.STATE_READY) {
+                            _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
+                        }
+                    } else {
+                        Log.w(TAG, "Playback suppressed (reason=$playbackSuppressionReason) — re-asserting play()")
+                        if (p.playWhenReady) {
+                            p.play()
+                        }
+                    }
+                }
+
+                override fun onMediaItemTransition(
+                    mediaItem: androidx.media3.common.MediaItem?,
+                    reason: Int
+                ) {
+                    if (reason == androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                        Log.d(TAG, "ExoPlayer onMediaItemTransition AUTO triggered for: ${mediaItem?.mediaId}")
+                        scope.launch(Dispatchers.Main) {
+                            handleGaplessTransition(mediaItem, context)
+                        }
                     }
                 }
 
@@ -2479,34 +2592,48 @@ object SongPlayer {
                 kotlinx.coroutines.delay(250)
                 val ctx = appCtx ?: continue
 
-                // Stalled stream auto-recovery: check if player is stuck in STATE_BUFFERING at 00:00 for >4.5s
+                // Stalled stream auto-recovery: check if player is stuck at 00:00 without advancing
                 player?.let { p ->
-                    val isBuffering = withContext(Dispatchers.Main) { p.playbackState == androidx.media3.common.Player.STATE_BUFFERING }
+                    val state = withContext(Dispatchers.Main) { p.playbackState }
+                    val isPlaying = withContext(Dispatchers.Main) { p.isPlaying }
+                    val playWhenReady = withContext(Dispatchers.Main) { p.playWhenReady }
                     val currentPos = withContext(Dispatchers.Main) { p.currentPosition }
-                    if (isBuffering && currentPos <= 1000L) {
+                    val isStuckAtStart = (state == androidx.media3.common.Player.STATE_BUFFERING ||
+                            (state == androidx.media3.common.Player.STATE_READY && !isPlaying && playWhenReady)) &&
+                            currentPos <= 1000L
+
+                    if (isStuckAtStart) {
                         if (bufferingStartMs == 0L) {
                             bufferingStartMs = System.currentTimeMillis()
-                        } else if (System.currentTimeMillis() - bufferingStartMs > 4500L) {
-                            val song = currentRequest
-                            Log.w(TAG, "Stream stalled at 00:00 for over 4.5s on source $currentSource — failing over to next source")
-                            bufferingStartMs = 0L
-                            if (song.isNotBlank()) {
-                                invalidateResolvedStream(song)
-                                if (currentSource.startsWith("Deezer")) {
-                                    failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Deezer")
-                                } else if (currentSource.startsWith("Lossless")) {
-                                    failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Lossless")
-                                } else if (currentSource.startsWith("Saavn")) {
-                                    failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
-                                } else if (currentSource.startsWith("YouTube")) {
-                                    activeResolvedVideoId[song]?.let { badVid ->
-                                        failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
-                                    }
-                                }
-                                triggerReconnect(ctx)
-                            } else {
+                        } else {
+                            val elapsed = System.currentTimeMillis() - bufferingStartMs
+                            // If stuck in STATE_READY for > 1s, kick playback directly on main thread
+                            if (elapsed in 1000L..2500L && state == androidx.media3.common.Player.STATE_READY && !isPlaying) {
                                 withContext(Dispatchers.Main) {
-                                    skipToNextTrack(ctx)
+                                    p.play()
+                                }
+                            } else if (elapsed > 4000L) {
+                                val song = currentRequest
+                                Log.w(TAG, "Stream stalled at 00:00 for over 4s on source $currentSource (state=$state, playing=$isPlaying) — failing over to next source")
+                                bufferingStartMs = 0L
+                                if (song.isNotBlank()) {
+                                    invalidateResolvedStream(song)
+                                    if (currentSource.startsWith("Deezer")) {
+                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Deezer")
+                                    } else if (currentSource.startsWith("Lossless")) {
+                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Lossless")
+                                    } else if (currentSource.startsWith("Saavn")) {
+                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
+                                    } else if (currentSource.startsWith("YouTube") || currentSource.startsWith("Streamed")) {
+                                        activeResolvedVideoId[song]?.let { badVid ->
+                                            failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                        }
+                                    }
+                                    triggerReconnect(ctx)
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        skipToNextTrack(ctx)
+                                    }
                                 }
                             }
                         }
@@ -2535,8 +2662,8 @@ object SongPlayer {
                 // Audio Scrobbling Engine update
                 com.music.spotui.data.scrobble.ScrobblerEngine.onPlaybackProgress(ctx, pos)
 
-                // Zero-Latency Gapless Playback Engine: Pre-resolve & pre-buffer next track at 80% track duration
-                if (pos >= (dur * 0.80) && !hasPreloadedCurrentTrack) {
+                // Zero-Latency Gapless Playback Engine: Pre-resolve & pre-buffer next track early (at 3.5s mark)
+                if (pos >= 3500L && !hasPreloadedCurrentTrack) {
                     hasPreloadedCurrentTrack = true
                     triggerLookaheadPreResolution(ctx)
                 }
@@ -2558,7 +2685,8 @@ object SongPlayer {
 
     /**
      * Zero-Latency Lookahead Pre-Resolution Worker:
-     * Fires at 80% track duration to pre-resolve stream URLs and pre-buffer the intro into media cache.
+     * Fires early to pre-resolve stream URLs, pre-buffer the intro into media cache,
+     * and seamlessly append the next track to ExoPlayer's playlist for sample-accurate gapless playback.
      */
     private fun triggerLookaheadPreResolution(ctx: Context) {
         val state = boundState ?: return
@@ -2570,26 +2698,79 @@ object SongPlayer {
 
         scope.launch(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Gapless Lookahead Pre-Resolution triggered at 80% mark for '${nextSong.title}'")
+                Log.d(TAG, "Gapless Lookahead Pre-Resolution triggered for '${nextSong.title}'")
                 val localManager = com.music.spotui.storage.LocalFileManager.getInstance(ctx)
                 val isLocal = localManager.hasDownloadedFile(nextSong.id.toString()) ||
                     (nextSong.spotifyTrackId.isNotBlank() && localManager.hasDownloadedFile(nextSong.spotifyTrackId))
 
-                if (isLocal) {
-                    Log.d(TAG, "Next track '${nextSong.title}' verified locally on disk.")
-                    return@launch
+                val effectiveNextUrl: String? = if (isLocal) {
+                    val uri = localManager.getValidLocalUri(nextSong.id.toString())
+                        ?: localManager.getValidLocalUri(nextSong.spotifyTrackId)
+                    Log.d(TAG, "Next track '${nextSong.title}' verified locally on disk ($uri).")
+                    uri?.toString()
+                } else {
+                    val resolvedUrl = resolveStreamUrl(nextSong.url, ctx, forPlayback = false)
+                    if (resolvedUrl != null) {
+                        com.music.spotui.player.StreamUrlCache.put(nextSong.url, resolvedUrl, source = currentSource, quality = currentQuality)
+                        cacheIntro(resolvedUrl, ctx)
+                        Log.d(TAG, "Gapless Pre-Resolution completed & cached for '${nextSong.title}'")
+                    }
+                    resolvedUrl
                 }
 
-                val resolvedUrl = resolveStreamUrl(nextSong.url, ctx, forPlayback = false)
-                if (resolvedUrl != null) {
-                    com.music.spotui.player.StreamUrlCache.put(nextSong.url, resolvedUrl, source = currentSource, quality = currentQuality)
-                    cacheIntro(resolvedUrl, ctx)
-                    Log.d(TAG, "Gapless Pre-Resolution completed & cached for '${nextSong.title}'")
+                val gaplessEnabled = com.music.spotui.data.preferences.isGaplessPlaybackEnabled(ctx)
+                val crossfadeMs = com.music.spotui.data.preferences.getCrossfadeMs(ctx)
+                if (gaplessEnabled && crossfadeMs <= 0 && effectiveNextUrl != null) {
+                    withContext(Dispatchers.Main) {
+                        val p = player ?: return@withContext
+                        if (p.mediaItemCount == 1) {
+                            val nextItem = buildMediaItem(
+                                streamUrl = effectiveNextUrl,
+                                mimeType = streamMimeType(effectiveNextUrl),
+                                title = nextSong.title,
+                                artist = nextSong.singer,
+                                cover = nextSong.coverUri,
+                                songQuery = nextSong.url
+                            )
+                            p.addMediaItem(nextItem)
+                            Log.d(TAG, "Gapless next media item queued in ExoPlayer: '${nextSong.title}'")
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Gapless lookahead pre-resolution failed for next track: ${e.message}")
             }
         }
+    }
+
+    private fun handleGaplessTransition(mediaItem: androidx.media3.common.MediaItem?, ctx: Context) {
+        val state = boundState ?: CurrentSongState.instance ?: return
+        val q = state.queue.value
+        if (q.isEmpty()) return
+        val curIdx = state.songIndex.value
+        val mediaId = mediaItem?.mediaId.orEmpty()
+        val targetIdx = if (mediaId.isNotBlank()) {
+            val idx = q.indexOfFirst { it.url == mediaId || it.id.toString() == mediaId || it.spotifyTrackId == mediaId }
+            if (idx >= 0) idx else (curIdx + 1).coerceAtMost(q.size - 1)
+        } else {
+            if (curIdx >= 0 && curIdx < q.size - 1) curIdx + 1 else 0
+        }
+        val nextSong = q.getOrNull(targetIdx) ?: return
+        Log.d(TAG, "Gapless transition updated to: '${nextSong.title}' (index $targetIdx)")
+        state.updateSongState(
+            nextSong.coverUri,
+            nextSong.title,
+            nextSong.singer,
+            true,
+            nextSong.id,
+            targetIdx,
+            nextSong.album
+        )
+        setNowPlayingMeta(nextSong.title, nextSong.singer, nextSong.coverUri)
+        currentRequest = nextSong.url
+        hasPreloadedCurrentTrack = false
+        _playbackStatus.value = PlaybackStatus.Playing(currentSource, currentQuality)
+        triggerLookaheadPreResolution(ctx)
     }
 
     /** Begin blending the current track into the next queue item. */
@@ -2645,16 +2826,6 @@ object SongPlayer {
     private suspend fun performCrossfade(effectiveMs: Int, djMode: Boolean) {
         val steps = 50
         val delayPerStep = (effectiveMs / steps).coerceAtLeast(20)
-        if (djMode) {
-            currentPlayerFilter?.apply {
-                filterType = com.music.spotui.audio.BiquadFilter.FilterType.LOW_PASS
-                cutoffFrequencyHz = CF_LPF_START_HZ; enabled = true
-            }
-            secondaryPlayerFilter?.apply {
-                filterType = com.music.spotui.audio.BiquadFilter.FilterType.HIGH_PASS
-                cutoffFrequencyHz = CF_HPF_START_HZ; enabled = true
-            }
-        }
         crossfadeJob?.cancel()
         val job = scope.launch {
             try {
@@ -2665,11 +2836,6 @@ object SongPlayer {
                     withContext(Dispatchers.Main) {
                         player?.volume = cos(angle)
                         secondaryPlayer?.volume = sin(angle)
-                        if (djMode) {
-                            val fp = sigmoid(progress)
-                            currentPlayerFilter?.cutoffFrequencyHz = expInterpolate(CF_LPF_START_HZ, CF_LPF_END_HZ, fp)
-                            secondaryPlayerFilter?.cutoffFrequencyHz = expInterpolate(CF_HPF_START_HZ, CF_HPF_END_HZ, fp)
-                        }
                     }
                     kotlinx.coroutines.delay(delayPerStep.toLong())
                 }

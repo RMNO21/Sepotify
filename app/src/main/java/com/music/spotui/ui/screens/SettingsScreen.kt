@@ -81,6 +81,8 @@ fun SettingsScreen(navController: NavController) {
     var spotifyCookieInput by remember { mutableStateOf("") }
     var spotifySessionKey by remember { mutableStateOf(com.music.spotui.data.api.SpotifySession.spDc(context)) }
     val isSpotifyLoggedIn = spotifySessionKey.isNotBlank()
+    var isCheckingUpdates by remember { mutableStateOf(false) }
+    var availableUpdate by remember { mutableStateOf<com.music.spotui.data.update.UpdateChecker.UpdateInfo?>(null) }
 
     Scaffold(
         containerColor = AppBackground,
@@ -438,6 +440,44 @@ fun SettingsScreen(navController: NavController) {
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
+
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF1DB954).copy(alpha = 0.15f))
+                        .clickable {
+                            navController.navigate(com.music.spotui.ui.navigation.Routes.StorageManagement.route)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Storage & Cache Management Screen",
+                            color = Color(0xFF1DB954),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "View details, manage downloads, and clear streaming cache",
+                            color = Color.LightGray,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Text(
+                        text = "Open",
+                        color = Color(0xFF1DB954),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF1DB954).copy(alpha = 0.2f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -611,7 +651,80 @@ fun SettingsScreen(navController: NavController) {
                         .padding(vertical = 12.dp),
                 )
             }
+            SectionTitle("About & updates")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("App Version", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("v${com.music.spotui.BuildConfig.VERSION_NAME} (Build ${com.music.spotui.BuildConfig.VERSION_CODE})", color = Color(0xFFB3B3B3), fontSize = 12.sp)
+                }
+            }
+
+            Text(
+                text = if (isCheckingUpdates) "Checking for updates..." else "Check for Updates",
+                color = AppPalette,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = !isCheckingUpdates) {
+                        isCheckingUpdates = true
+                        scope.launch {
+                            val info = com.music.spotui.data.update.UpdateChecker.check(context)
+                            isCheckingUpdates = false
+                            if (info != null) {
+                                availableUpdate = info
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "SpotUI is up to date (v${com.music.spotui.BuildConfig.VERSION_NAME})",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                    .padding(vertical = 12.dp),
+            )
+
             Spacer(Modifier.height(160.dp))
+        }
+
+        if (availableUpdate != null) {
+            val info = availableUpdate!!
+            AlertDialog(
+                onDismissRequest = { availableUpdate = null },
+                title = { Text("Update Available", color = Color.White, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "SpotUI ${info.version} is available. Updates install directly on top of your existing app without losing your music or playlists.",
+                        color = Color.LightGray,
+                        fontSize = 14.sp,
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            com.music.spotui.data.update.AppUpdateInstaller.startUpdate(context, info)
+                            availableUpdate = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette, contentColor = Color.Black),
+                    ) {
+                        Text("Install Update", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { availableUpdate = null }) {
+                        Text("Later", color = Color.LightGray)
+                    }
+                },
+                containerColor = Color(0xFF181818),
+            )
         }
 
         if (showSpotifyCookieDialog) {

@@ -21,7 +21,7 @@ import kotlin.math.sqrt
 class LoudnessNormalizerAudioProcessor : BaseAudioProcessor() {
 
     @Volatile
-    var enabled: Boolean = true
+    var enabled: Boolean = false
 
     // Target loudness in LUFS (-14.0 LUFS standard)
     @Volatile

@@ -141,7 +141,11 @@ class MainActivity : ComponentActivity() {
         }
 
         // Attach WebView for Spotify web player if enabled
-        com.music.spotui.di.SpotifyWebPlayer.attach(this)
+        if (com.music.spotui.di.SongPlayer.webPlayerEnabled &&
+            com.music.spotui.data.preferences.isWebPlaybackEnabled(this)
+        ) {
+            com.music.spotui.di.SpotifyWebPlayer.attach(this)
+        }
     }
 
     override fun onDestroy() {

@@ -197,7 +197,6 @@ fun LocalFilesScreen(navController: NavController) {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp, 8.dp)
                                 .combinedClickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -208,13 +207,14 @@ fun LocalFilesScreen(navController: NavController) {
                                     },
                                     onClick = {
                                         playerViewModel.updateQueue(songs)
-                                        SongPlayer.playSong(song.url, context)
                                         playerViewModel.updateSongState(
                                             song.coverUri, song.title, song.singer,
                                             true, song.id, index, song.album,
                                         )
+                                        SongPlayer.playSong(song.url, context)
                                     },
-                                ),
+                                )
+                                .padding(20.dp, 8.dp)
                         ) {
                             GlideImage(
                                 modifier = Modifier.size(48.dp).clip(RoundedCornerShape(4.dp)),

@@ -28,6 +28,7 @@ sealed class Routes(
     object DeezerIntro : Routes(0, "DeezerIntro", "deezerintro")
     object LocalFiles : Routes(0, "LocalFiles", "localfiles")
     object SpotiflacVerify : Routes(0, "SpotiflacVerify", "spotiflacverify")
+    object StorageManagement : Routes(0, "StorageManagement", "storage_management")
 }
 
 /** Builds a Browse-category route carrying the search genre and a display title. */

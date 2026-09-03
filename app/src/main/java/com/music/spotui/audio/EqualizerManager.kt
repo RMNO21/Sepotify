@@ -65,10 +65,7 @@ object EqualizerManager {
     val bassBoostStrength: StateFlow<Int> = _bassBoostStrength.asStateFlow()
 
     fun bindAudioSession(sessionId: Int) {
-        if (sessionId <= 0 || sessionId == currentSessionId) return
-        currentSessionId = sessionId
         release()
-        initAudioEffects(sessionId)
     }
 
     private fun initAudioEffects(sessionId: Int) {

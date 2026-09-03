@@ -555,7 +555,6 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                                     android.widget.Toast.makeText(context, "No downloaded songs available offline", android.widget.Toast.LENGTH_SHORT).show()
                                                 } else {
                                                     playlistViewModel.startShuffled(playable)?.let { first ->
-                                                        SongPlayer.playSong(first.url, context)
                                                         playlistViewModel.updateSongState(
                                                             first.coverUri,
                                                             first.title,
@@ -565,6 +564,7 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                                             0,
                                                             currentName,
                                                         )
+                                                        SongPlayer.playSong(first.url, context)
                                                     }
                                                 }
                                             },
@@ -596,7 +596,6 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                                     }
                                                     else -> {
                                                         playlistViewModel.updateQueue(playable)
-                                                        SongPlayer.playSong(playable[0].url, context)
                                                         playlistViewModel.updateSongState(
                                                             playable[0].coverUri,
                                                             playable[0].title,
@@ -606,6 +605,7 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                                             0,
                                                             currentName
                                                         )
+                                                        SongPlayer.playSong(playable[0].url, context)
                                                     }
                                                 }
                                             }
@@ -706,7 +706,7 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                     }
                 }
 
-                itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                itemsIndexed(songs, key = { index, song -> "${song.id}_$index" }) { index, song ->
                     val currentColor = if (song.id == playlistViewModel.currentSongId.value)
                         Color(AppPalette.toArgb()) else Color.White
                     val isOffline = !com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
@@ -720,8 +720,6 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 8.dp)
-                            .alpha(rowAlpha)
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
@@ -731,20 +729,23 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                                         android.widget.Toast.makeText(context, "Song is unavailable offline", android.widget.Toast.LENGTH_SHORT).show()
                                     } else {
                                         val playableQueue = if (isOffline) songs.filter { com.music.spotui.data.preferences.isSongDownloaded(context, it) } else songs
+                                        val queueIndex = playableQueue.indexOfFirst { it.id == song.id }.let { if (it >= 0) it else index }
                                         playlistViewModel.updateQueue(playableQueue)
-                                        SongPlayer.playSong(song.url, context)
                                         playlistViewModel.updateSongState(
                                             song.coverUri,
                                             song.title,
                                             song.singer,
                                             true,
                                             song.id,
-                                            index,
+                                            queueIndex,
                                             currentName
                                         )
+                                        SongPlayer.playSong(song.url, context)
                                     }
                                 },
                             )
+                            .padding(horizontal = 20.dp, vertical = 8.dp)
+                            .alpha(rowAlpha)
                     ) {
                         GlideImage(
                             modifier = Modifier

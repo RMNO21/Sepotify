@@ -423,7 +423,7 @@ fun LikedSongsScreen(navController: NavController) {
                     }
                 }
 
-                itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                itemsIndexed(songs, key = { index, song -> "${song.id}_$index" }) { index, song ->
                     val currentColor = if (song.id == likedSongsViewModel.currentSongId.value)
                         Color(AppPalette.toArgb()) else Color.White
 
@@ -432,14 +432,12 @@ fun LikedSongsScreen(navController: NavController) {
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp, 8.dp)
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
                                 onLongClick = { menuSong = song },
                                 onClick = {
                                     likedSongsViewModel.updateQueue(songs)
-                                    SongPlayer.playSong(song.url, context)
                                     likedSongsViewModel.updateSongState(
                                         song.coverUri,
                                         song.title,
@@ -449,8 +447,10 @@ fun LikedSongsScreen(navController: NavController) {
                                         index,
                                         "Liked Songs"
                                     )
+                                    SongPlayer.playSong(song.url, context)
                                 },
                             )
+                            .padding(20.dp, 8.dp)
                     ) {
                         GlideImage(
                             modifier = Modifier

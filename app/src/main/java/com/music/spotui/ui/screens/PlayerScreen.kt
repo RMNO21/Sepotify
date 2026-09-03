@@ -343,21 +343,15 @@ fun PlayerScreen(navController: NavController) {
     Log.d("queueSong", queueSongs.toString())
 
     LaunchedEffect(key1 = songPlayingState) {
-
-            while (songPlayingState) {
-
-                    songProgress = SongPlayer.getCurrentPosition().toFloat()
-                    songProgressText = playerViewModel.formatDuration(songProgress.toLong())
-
-//                if (songProgress >= songDuration ) {
-//                    if (playerViewModel.repeatState.value){
-//                        SongPlayer.seekTo(0) // Restart the song
-//                    }
-//                }
-
-
-                delay(300L) // update every .0 second
+        while (songPlayingState) {
+            songProgress = SongPlayer.getCurrentPosition().toFloat()
+            songProgressText = playerViewModel.formatDuration(songProgress.toLong())
+            val dur = SongPlayer.getDuration()
+            if (dur > 0) {
+                songDurationText = playerViewModel.formatDuration(dur)
             }
+            delay(300L)
+        }
     }
 
 
@@ -914,6 +908,30 @@ fun PlayerInfo(
                             )
                             Text(
                                 text = if (source.isNotBlank()) "Buffering • " + (if (source == "YouTube") "Streamed" else source) else "Buffering stream…",
+                                color = badgeColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(start = 5.dp),
+                            )
+                        }
+                    }
+                    is com.music.spotui.di.SongPlayer.PlaybackStatus.Paused -> {
+                        val badgeColor = Color(0xFFAAAAAA)
+                        val s = if (st.source.isNotBlank()) (if (st.source == "YouTube") "Streamed" else st.source) else (if (source == "YouTube") "Streamed" else source)
+                        val q = if (st.quality.isNotBlank()) " • ${st.quality}" else (if (quality.isNotBlank()) " • $quality" else "")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 3.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor)
+                            )
+                            Text(
+                                text = "Paused • $s$q",
                                 color = badgeColor,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -1964,7 +1982,9 @@ private fun CanvasVideo(
     androidx.compose.ui.viewinterop.AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            androidx.media3.ui.PlayerView(ctx).apply {
+            val inflater = android.view.LayoutInflater.from(ctx)
+            val pv = inflater.inflate(com.music.spotui.R.layout.item_canvas_player, null, false) as androidx.media3.ui.PlayerView
+            pv.apply {
                 layoutParams = android.view.ViewGroup.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT

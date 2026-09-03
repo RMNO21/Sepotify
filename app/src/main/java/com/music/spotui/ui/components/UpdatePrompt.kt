@@ -35,9 +35,7 @@ fun UpdatePrompt() {
         text = { Text("spotui ${info.version} is available. You're on an older version — upgrade to get the latest fixes and features.") },
         confirmButton = {
             TextButton(onClick = {
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl)))
-                }
+                com.music.spotui.data.update.AppUpdateInstaller.startUpdate(context, info)
                 update = null
             }) { Text("Upgrade") }
         },

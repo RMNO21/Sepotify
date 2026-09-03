@@ -65,6 +65,10 @@ internal class DeezerDataSource : BaseDataSource(/* isNetwork = */ true) {
         }
 
         val end = if (dataSpec.length != C.LENGTH_UNSET.toLong()) position + dataSpec.length - 1 else -1L
+        val reqEnd = if (encrypted && end >= 0) {
+            val rem = (end + 1) % 2048
+            if (rem != 0L) end + (2048 - rem) else end
+        } else end
         val conn = (URL(cdnUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 20_000
@@ -72,7 +76,7 @@ internal class DeezerDataSource : BaseDataSource(/* isNetwork = */ true) {
             setRequestProperty("User-Agent", USER_AGENT)
             setRequestProperty("Accept-Language", "*")
             setRequestProperty("Accept", "*/*")
-            setRequestProperty("Range", "bytes=$alignedStart-${if (end < 0) "" else end}")
+            setRequestProperty("Range", "bytes=$alignedStart-${if (reqEnd < 0) "" else reqEnd}")
         }
         conn.connect()
         val code = conn.responseCode

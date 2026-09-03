@@ -166,6 +166,14 @@ fun MyNavHost(
             SettingsScreen(navHostController)
         }
 
+        composable(Routes.StorageManagement.route){
+            LaunchedEffect(playerState) {
+                bottomBarState.value = true
+                bottomBarPlayerState.value = playerState != ""
+            }
+            com.music.spotui.ui.screens.StorageManagementScreen(navHostController)
+        }
+
         composable(Routes.History.route){
             LaunchedEffect(playerState) {
                 bottomBarState.value = true

@@ -129,7 +129,19 @@ fun DownloadsScreen(navController: NavController) {
                         containerColor = Color.Transparent,
                         titleContentColor = Color.White,
                     ),
-                    title = { Text(text = "") }
+                    title = { Text(text = "") },
+                    actions = {
+                        androidx.compose.material3.IconButton(
+                            onClick = { navController.navigate(com.music.spotui.ui.navigation.Routes.StorageManagement.route) }
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_settings),
+                                contentDescription = "Manage Storage & Cache",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
                 )
             }
         ) { innerPadding ->
@@ -361,20 +373,20 @@ fun DownloadsScreen(navController: NavController) {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp, 8.dp)
                                 .combinedClickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
                                     onLongClick = { menuSong = song },
                                     onClick = {
                                         playerViewModel.updateQueue(songs)
-                                        SongPlayer.playSong(song.url, context)
                                         playerViewModel.updateSongState(
                                             song.coverUri, song.title, song.singer,
                                             true, song.id, index, "Downloaded"
                                         )
+                                        SongPlayer.playSong(song.url, context)
                                     },
                                 )
+                                .padding(20.dp, 8.dp)
                         ) {
                             GlideImage(
                                 modifier = Modifier

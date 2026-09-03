@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -782,7 +783,7 @@ private fun LibrarySearchHierarchy(
                 )
             }
 
-            items(matchingTracks, key = { it.id }) { song ->
+            itemsIndexed(matchingTracks, key = { index, song -> "${song.id}_$index" }) { index, song ->
                 val isCurrent = song.id == playlistViewModel.currentSongId.value
                 val titleColor = if (isCurrent) AppPalette else Color.White
 
@@ -790,25 +791,26 @@ private fun LibrarySearchHierarchy(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp)
                         .combinedClickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onLongClick = { onSongMenu(song) },
                             onClick = {
+                                val queueIndex = matchingTracks.indexOfFirst { it.id == song.id }.let { if (it >= 0) it else index }
                                 playlistViewModel.updateQueue(matchingTracks)
-                                SongPlayer.playSong(song.url, context)
                                 playlistViewModel.updateSongState(
                                     song.coverUri,
                                     song.title,
                                     song.singer,
                                     true,
                                     song.id,
-                                    matchingTracks.indexOf(song),
+                                    queueIndex,
                                     "Library Search"
                                 )
+                                SongPlayer.playSong(song.url, context)
                             }
                         )
+                        .padding(horizontal = 20.dp, vertical = 6.dp)
                 ) {
                     GlideImage(
                         modifier = Modifier

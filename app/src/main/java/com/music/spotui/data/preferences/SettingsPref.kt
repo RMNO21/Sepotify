@@ -110,3 +110,23 @@ fun currentStreamingQuality(c: Context): StreamQuality {
     val cm = c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     return if (cm.isActiveNetworkMetered) getCellularQuality(c) else getWifiQuality(c)
 }
+
+private const val KEY_GAPLESS_PLAYBACK = "gapless_playback_enabled"
+fun isGaplessPlaybackEnabled(c: Context): Boolean = prefs(c).getBoolean(KEY_GAPLESS_PLAYBACK, true)
+fun setGaplessPlaybackEnabled(c: Context, v: Boolean) = prefs(c).edit().putBoolean(KEY_GAPLESS_PLAYBACK, v).apply()
+
+private const val KEY_MEDIA_CACHE_MAX_MB = "media_cache_max_mb"
+fun getMediaCacheMaxMb(c: Context): Int = prefs(c).getInt(KEY_MEDIA_CACHE_MAX_MB, 1024)
+fun setMediaCacheMaxMb(c: Context, mb: Int) = prefs(c).edit().putInt(KEY_MEDIA_CACHE_MAX_MB, mb).apply()
+
+fun formatBytesHumanReadable(bytes: Long): String {
+    if (bytes <= 0) return "0 MB"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GB", gb)
+        mb >= 1.0 -> String.format(java.util.Locale.US, "%.1f MB", mb)
+        else -> String.format(java.util.Locale.US, "%.1f KB", kb)
+    }
+}
