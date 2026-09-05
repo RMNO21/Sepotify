@@ -241,9 +241,34 @@ object LocalMediaProxyServer {
         rangeHeader: String?
     ) {
         val client = NetworkClientProvider.getOkHttpClient(appContext)
+        val uri = android.net.Uri.parse(rawUrl)
+        val host = uri.host.orEmpty()
+        val clientParam = (uri.getQueryParameter("c") ?: uri.getQueryParameter("client"))?.uppercase()
+        val ua = when {
+            clientParam == "IOS" || clientParam == "IPADOS" ->
+                "com.google.ios.youtube/19.49.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)"
+            clientParam == "ANDROID" || clientParam == "ANDROID_MUSIC" || clientParam == "ANDROID_NO_SDK" ->
+                "com.google.android.youtube/19.49.34 (Linux; U; Android 14; en_US; Pixel 8) gzip"
+            clientParam == "WEB" || clientParam == "WEB_REMIX" ->
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            clientParam?.contains("TV") == true ->
+                "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
+            else ->
+                "com.google.ios.youtube/19.49.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)"
+        }
+        val isWeb = clientParam == "WEB" || clientParam == "WEB_REMIX" || clientParam?.contains("TV") == true
+
         val requestBuilder = Request.Builder()
             .url(rawUrl)
-            .header("User-Agent", "Mozilla/5.0 (Android; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0")
+            .header("User-Agent", ua)
+            .header("Accept", "*/*")
+            .header("Accept-Encoding", "identity")
+            .header("Connection", "keep-alive")
+
+        if (isWeb) {
+            requestBuilder.header("Origin", "https://www.youtube.com")
+                .header("Referer", "https://www.youtube.com/")
+        }
 
         if (!rangeHeader.isNullOrBlank()) {
             requestBuilder.header("Range", rangeHeader)

@@ -17,15 +17,28 @@ import java.io.File
 object PlayerJsFetcher {
     private const val TAG = "Metrolist_CipherFetcher"
     private const val IFRAME_API_URL = "https://www.youtube.com/iframe_api"
-    private const val PLAYER_JS_URL_TEMPLATE = "https://www.youtube.com/s/player/%s/player_ias.vflset/en_GB/base.js"
+    private const val EMBED_URL = "https://www.youtube.com/embed/dQw4w9WgXcQ"
+    private const val MUSIC_URL = "https://music.youtube.com"
+    private const val FALLBACK_PLAYER_HASH = "74edf1a3"
+    private val PLAYER_JS_URL_TEMPLATES = listOf(
+        "https://www.youtube.com/s/player/%s/player_ias.vflset/en_GB/base.js",
+        "https://www.youtube.com/s/player/%s/player_ias.vflset/en_US/base.js",
+        "https://www.youtube.com/s/player/%s/player_ias.vflset/base.js"
+    )
     private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L // 6 hours
 
     private val httpClient = OkHttpClient.Builder()
         .proxy(YouTube.proxy)
         .build()
 
-    // Regex to extract player hash from iframe_api response
-    private val PLAYER_HASH_REGEX = Regex("""\\?/s\\?/player\\?/([a-zA-Z0-9_-]+)\\?/""")
+    // Regexes to extract player hash from YouTube web pages
+    private val PLAYER_HASH_PATTERNS = listOf(
+        Regex("""(?:/|\\/)s(?:/|\\/)player(?:/|\\/)([a-zA-Z0-9_-]{6,16})(?:/|\\/)"""),
+        Regex("""player_ias\.vflset/[^/]+/([a-zA-Z0-9_-]{6,16})/"""),
+        Regex("""jsUrl['":\s]+[^"']*?/player/([a-zA-Z0-9_-]{6,16})/"""),
+        Regex("""/s/player/([a-zA-Z0-9_-]{6,16})/player_ias\.vflset"""),
+        Regex("""["']([^"']*?/s/player/([a-zA-Z0-9_-]{6,16})/[^"']*)["']""")
+    )
 
     private fun getCacheDir(): File = File(CipherDeobfuscator.appContext.filesDir, "cipher_cache")
 
@@ -61,27 +74,37 @@ object PlayerJsFetcher {
                 Timber.tag(TAG).d("Cache miss, will fetch fresh")
             }
 
-            // Fetch player hash from iframe_api
-            Timber.tag(TAG).d("Fetching player hash from iframe_api...")
-            val hash = fetchPlayerHash()
+            // Fetch player hash from web sources
+            Timber.tag(TAG).d("Fetching player hash...")
+            var hash = fetchPlayerHash()
             if (hash == null) {
-                Timber.tag(TAG).e("Failed to extract player hash from iframe_api")
-                return@withContext null
+                Timber.tag(TAG).w("Failed to extract player hash from web endpoints; trying fallback hash $FALLBACK_PLAYER_HASH")
+                hash = FALLBACK_PLAYER_HASH
             }
-            Timber.tag(TAG).d("Extracted player hash: $hash")
+            Timber.tag(TAG).d("Using player hash: $hash")
 
             // Download player JS
             Timber.tag(TAG).d("Downloading player JS for hash: $hash...")
-            val playerJs = downloadPlayerJs(hash)
+            var playerJs = downloadPlayerJs(hash)
+            if (playerJs == null && hash != FALLBACK_PLAYER_HASH) {
+                Timber.tag(TAG).w("Failed to download for hash $hash; retrying with fallback $FALLBACK_PLAYER_HASH")
+                hash = FALLBACK_PLAYER_HASH
+                playerJs = downloadPlayerJs(hash)
+            }
+
             if (playerJs == null) {
                 Timber.tag(TAG).e("Failed to download player JS for hash=$hash")
+                // Check if any expired cache exists as last resort
+                val lastResort = readAnyCache()
+                if (lastResort != null) {
+                    Timber.tag(TAG).w("Using expired cached player JS as emergency fallback")
+                    return@withContext lastResort
+                }
                 return@withContext null
             }
 
             Timber.tag(TAG).d("=== PLAYER.JS DOWNLOADED ===")
-            Timber.tag(TAG).d("hash: $hash")
-            Timber.tag(TAG).d("length: ${playerJs.length} chars")
-            Timber.tag(TAG).d("preview: ${playerJs.take(100)}...")
+            Timber.tag(TAG).d("hash: $hash, length: ${playerJs.length} chars")
 
             // Cache the result
             writeToCache(hash, playerJs)
@@ -89,7 +112,7 @@ object PlayerJsFetcher {
             Pair(playerJs, hash)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "getPlayerJs exception: ${e.message}")
-            null
+            readAnyCache()
         }
     }
 
@@ -130,8 +153,8 @@ object PlayerJsFetcher {
                 return null
             }
 
-            val hash = hashData[0]
-            val timestamp = hashData[1].toLongOrNull()
+            val hash = hashData[0].trim()
+            val timestamp = hashData[1].trim().toLongOrNull()
             if (timestamp == null) {
                 Timber.tag(TAG).d("Could not parse timestamp from hash file")
                 return null
@@ -167,6 +190,19 @@ object PlayerJsFetcher {
         }
     }
 
+    private fun readAnyCache(): Pair<String, String>? {
+        return try {
+            val cacheDir = getCacheDir()
+            val files = cacheDir.listFiles()?.filter { it.name.startsWith("player_") && it.name.endsWith(".js") }
+            val first = files?.firstOrNull() ?: return null
+            val hash = first.name.removePrefix("player_").removeSuffix(".js")
+            val content = first.readText()
+            if (content.isNotEmpty()) Pair(content, hash) else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun writeToCache(hash: String, playerJs: String) {
         Timber.tag(TAG).d("Writing to cache: hash=$hash, length=${playerJs.length}")
         try {
@@ -174,7 +210,6 @@ object PlayerJsFetcher {
 
             // Clean old cache files
             val oldFiles = cacheDir.listFiles()?.filter { it.name.startsWith("player_") }
-            Timber.tag(TAG).d("Cleaning ${oldFiles?.size ?: 0} old cache files")
             oldFiles?.forEach { it.delete() }
 
             getCacheFile(hash).writeText(playerJs)
@@ -187,67 +222,64 @@ object PlayerJsFetcher {
     }
 
     private fun fetchPlayerHash(): String? {
-        Timber.tag(TAG).d("Fetching iframe_api from: $IFRAME_API_URL")
+        val urls = listOf(IFRAME_API_URL, EMBED_URL, MUSIC_URL)
+        for (url in urls) {
+            try {
+                Timber.tag(TAG).d("Fetching player hash from: $url")
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+                    .build()
 
-        val request = Request.Builder()
-            .url(IFRAME_API_URL)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .build()
+                val response = httpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
 
-        val response = httpClient.newCall(request).execute()
-        Timber.tag(TAG).d("iframe_api response: HTTP ${response.code}")
-
-        if (!response.isSuccessful) {
-            Timber.tag(TAG).e("iframe_api HTTP ${response.code}")
-            return null
+                val body = response.body?.string() ?: continue
+                for (pattern in PLAYER_HASH_PATTERNS) {
+                    val match = pattern.find(body)
+                    if (match != null) {
+                        val candidate = match.groupValues.lastOrNull { it.length in 6..16 && it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' } }
+                        if (candidate != null) {
+                            Timber.tag(TAG).d("Found player hash via $url: $candidate")
+                            return candidate
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed to fetch player hash from $url")
+            }
         }
-
-        val body = response.body?.string()
-        if (body == null) {
-            Timber.tag(TAG).e("iframe_api response body is null")
-            return null
-        }
-
-        Timber.tag(TAG).d("iframe_api body length: ${body.length}")
-        Timber.tag(TAG).v("iframe_api body preview: ${body.take(200)}...")
-
-        val match = PLAYER_HASH_REGEX.find(body)
-        if (match == null) {
-            Timber.tag(TAG).e("Could not find player hash in iframe_api response")
-            Timber.tag(TAG).d("Regex pattern: ${PLAYER_HASH_REGEX.pattern}")
-            return null
-        }
-
-        val hash = match.groupValues[1]
-        Timber.tag(TAG).d("Found player hash: $hash")
-        return hash
+        return null
     }
 
     private fun downloadPlayerJs(hash: String): String? {
-        val url = PLAYER_JS_URL_TEMPLATE.format(hash)
-        Timber.tag(TAG).d("Downloading player.js from: $url")
+        for (template in PLAYER_JS_URL_TEMPLATES) {
+            val url = template.format(hash)
+            try {
+                Timber.tag(TAG).d("Downloading player.js from: $url")
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+                    .build()
 
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .build()
-
-        val response = httpClient.newCall(request).execute()
-        Timber.tag(TAG).d("player.js response: HTTP ${response.code}")
-
-        if (!response.isSuccessful) {
-            Timber.tag(TAG).e("player.js download HTTP ${response.code}")
-            return null
+                val response = httpClient.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (!body.isNullOrEmpty() && body.length > 5000) {
+                        Timber.tag(TAG).d("Successfully downloaded player.js from $url (${body.length} chars)")
+                        return body
+                    }
+                } else {
+                    response.close()
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed to download player.js from $url")
+            }
         }
-
-        val body = response.body?.string()
-        if (body == null) {
-            Timber.tag(TAG).e("player.js response body is null")
-            return null
-        }
-
-        Timber.tag(TAG).d("player.js downloaded: ${body.length} chars")
-        return body
+        return null
     }
 
     /**
@@ -261,8 +293,8 @@ object PlayerJsFetcher {
             }
 
             val hashData = hashFile.readText().split("\n")
-            val hash = hashData.getOrNull(0)
-            val timestamp = hashData.getOrNull(1)?.toLongOrNull()
+            val hash = hashData.getOrNull(0)?.trim()
+            val timestamp = hashData.getOrNull(1)?.trim()?.toLongOrNull()
             val cacheFile = hash?.let { getCacheFile(it) }
 
             mapOf(

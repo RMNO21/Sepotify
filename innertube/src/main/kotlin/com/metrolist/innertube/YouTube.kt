@@ -114,6 +114,9 @@ object YouTube {
             .jsonPrimitive.content
     }
 
+    suspend fun validateSession(client: YouTubeClient = WEB_REMIX): Result<Boolean> =
+        innerTube.validateSession(client)
+
     @JvmInline
     value class SearchFilter(val value: String) {
         companion object {

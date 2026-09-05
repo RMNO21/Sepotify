@@ -35,37 +35,7 @@ object EjsNTransformSolver {
      * Returns the URL with the transformed 'n' value, or the original URL if transform fails.
      */
     suspend fun transformNParamInUrl(url: String): String {
-        val nMatch = Regex("[?&]n=([^&]+)").find(url)
-        if (nMatch == null) {
-            Timber.tag(TAG).d("No 'n' parameter in SABR URL")
-            return url
-        }
-        val nValue = Uri.decode(nMatch.groupValues[1])
-        Timber.tag(TAG).d("SABR n-param: $nValue")
-
-        return withContext(NonCancellable) {
-            val solver = getOrCreateSolver()
-            if (solver == null) {
-                return@withContext url
-            }
-
-            if (!solver.nFunctionAvailable) {
-                Timber.tag(TAG).e("EJS n-solver not available")
-                return@withContext url
-            }
-
-            try {
-                val transformed = solver.transformN(nValue)
-                Timber.tag(TAG).d("SABR n-param transformed: $nValue -> $transformed")
-                url.replaceFirst(
-                    Regex("([?&])n=[^&]+"),
-                    "$1n=${Uri.encode(transformed)}"
-                )
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "SABR n-transform failed: ${e.message}")
-                url
-            }
-        }
+        return CipherDeobfuscator.transformNParamInUrl(url)
     }
 
     private suspend fun getOrCreateSolver(): SolverWebView? {

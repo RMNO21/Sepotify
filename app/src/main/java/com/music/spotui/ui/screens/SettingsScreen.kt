@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -476,6 +478,71 @@ fun SettingsScreen(navController: NavController) {
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFF1DB954).copy(alpha = 0.2f))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("Diagnostics & Playback Debug")
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF1A1A20))
+                    .padding(14.dp)
+            ) {
+                val debugEnabledFlow by com.music.spotui.debug.PlaybackDebugLogger.isDebugEnabledFlow.collectAsState()
+                SettingsSwitchRow(
+                    title = "Playback Debug Overlay",
+                    subtitle = "Show floating on-screen console with real-time stream status, InnerTube clients, and probe logs.",
+                    checked = debugEnabledFlow,
+                    onCheckedChange = { isChecked ->
+                        com.music.spotui.data.preferences.setDebugModeEnabled(context, isChecked)
+                    }
+                )
+
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Color(0xFF2C2C35))
+                )
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = "Export Playback Diagnostics",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Copies full InnerTube responses, client tokens, CDN status codes, and ExoPlayer errors to clipboard.",
+                    color = Color(0xFFB3B3B3),
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        com.music.spotui.debug.PlaybackDebugLogger.copyToClipboard(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AppPalette),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Copy Debug Info to Clipboard",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
                     )
                 }
             }

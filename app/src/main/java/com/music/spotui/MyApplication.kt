@@ -53,9 +53,9 @@ class MyApplication : Application(){
         appScope.launch {
             YouTube.visitorData = YouTube.visitorData().getOrNull() ?: YouTube.visitorData
         }
-        // YouTube playback runs anonymously; age-gated official audio falls back
-        // to matching normal YouTube uploads instead of requiring sign-in.
-        YouTube.cookie = null
+        // Initialize and periodically validate InnerTube authentication headers,
+        // cookies, and visitor data so playback never fails due to expired credentials.
+        com.music.spotui.innertube.InnerTubeAuthManager.init(this)
 
         // Warm the Home feed cache so the first navigation to Home is instant.
         // No-op (gracefully) until a Spotify token is available.

@@ -71,37 +71,50 @@ object FunctionNameExtractor {
 
     // ==================== DETECTION PATTERNS ====================
 
-    // Detect Q-array obfuscation: var Q="...".split("}")
-    private val Q_ARRAY_PATTERN = Regex("""var\s+Q\s*=\s*"[^"]+"\s*\.\s*split\s*\(\s*"\}"\s*\)""")
+    // Detect Q-array or split-array obfuscation
+    private val Q_ARRAY_PATTERN = Regex("""(?:var|let|const)\s+[a-zA-Z0-9$]+\s*=\s*["'][^"']+["']\s*\.\s*split\s*\(\s*["']\}["']\s*\)""")
 
     // Extract player hash from common patterns
     private val PLAYER_HASH_PATTERNS = listOf(
         Regex("""jsUrl['":\s]+[^"']*?/player/([a-f0-9]{8})/"""),
         Regex("""player_ias\.vflset/[^/]+/([a-f0-9]{8})/"""),
-        Regex("""/s/player/([a-f0-9]{8})/""")
+        Regex("""/s/player/([a-f0-9]{8})/"""),
+        Regex("""player-([a-f0-9]{8})""")
     )
 
-    // Modern 2025+ signature deobfuscation function patterns
+    // Modern 2025/2026 signature deobfuscation function patterns
     private val SIG_FUNCTION_PATTERNS = listOf(
-        // Pattern 1 (2025+): &&(VAR=FUNC(NUM,decodeURIComponent(VAR))
+        // Pattern 1 (2025/2026): &&(VAR=FUNC(NUM,decodeURIComponent(VAR))
         Regex("""&&\s*\(\s*[a-zA-Z0-9$]+\s*=\s*([a-zA-Z0-9$]+)\s*\(\s*(\d+)\s*,\s*decodeURIComponent\s*\(\s*[a-zA-Z0-9$]+\s*\)"""),
+        // Pattern 2 (nested numeric args): &&(VAR=FUNC(NUM,NUM,decodeURIComponent(VAR))
+        Regex("""&&\s*\(\s*[a-zA-Z0-9$]+\s*=\s*([a-zA-Z0-9$]+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*decodeURIComponent\s*\(\s*[a-zA-Z0-9$]+\s*\)"""),
+        // Pattern 3: .set("sig", encodeURIComponent(FUNC(...))) or .set("signature", ...)
+        Regex("""\.set\(["'](?:sig|signature)["'],\s*(?:encodeURIComponent\s*\()?([a-zA-Z0-9$]+)\("""),
         // Classic patterns (pre-2025, kept as fallback)
         Regex("""\b[cs]\s*&&\s*[adf]\.set\([^,]+\s*,\s*encodeURIComponent\(([a-zA-Z0-9$]+)\("""),
         Regex("""\b[a-zA-Z0-9]+\s*&&\s*[a-zA-Z0-9]+\.set\([^,]+\s*,\s*encodeURIComponent\(([a-zA-Z0-9$]+)\("""),
         Regex("""\bm=([a-zA-Z0-9${'$'}]{2,})\(decodeURIComponent\(h\.s\)\)"""),
         Regex("""\bc\s*&&\s*d\.set\([^,]+\s*,\s*(?:encodeURIComponent\s*\()([a-zA-Z0-9$]+)\("""),
         Regex("""\bc\s*&&\s*[a-z]\.set\([^,]+\s*,\s*encodeURIComponent\(([a-zA-Z0-9$]+)\("""),
+        // Direct function definition: func = function(a) { a = a.split(""); ... return a.join("") }
+        Regex("""\b([a-zA-Z0-9$]{2,})\s*=\s*function\(([a-zA-Z0-9$]+)\)\{\s*\2\s*=\s*\2\.split\(""\);"""),
+        Regex("""\bfunction\s+([a-zA-Z0-9$]{2,})\(([a-zA-Z0-9$]+)\)\{\s*\2\s*=\s*\2\.split\(""\);""")
     )
 
     // N-parameter (throttle) transform function patterns
     private val N_FUNCTION_PATTERNS = listOf(
         // Pattern 1: .get("n"))&&(b=FUNC[IDX](VAR)
         Regex("""\.get\("n"\)\)&&\(b=([a-zA-Z0-9$]+)(?:\[(\d+)\])?\(([a-zA-Z0-9])\)"""),
-        // Pattern 2: .get("n"))&&(FUNC=VAR[IDX](FUNC) (2025+ variant)
+        // Pattern 2: .get("n"))&&(FUNC=VAR[IDX](FUNC)
         Regex("""\.get\("n"\)\)\s*&&\s*\(([a-zA-Z0-9$]+)\s*=\s*([a-zA-Z0-9$]+)(?:\[(\d+)\])?\(\1\)"""),
-        // Pattern 3: String.fromCharCode(110) variant (110 = 'n')
+        // Pattern 3: .get("n") followed by assignment
+        Regex("""\.get\(["']n["']\)\s*&&\s*\(b\s*=\s*([a-zA-Z0-9$]+)(?:\[(\d+)\])?\(b\)"""),
+        Regex("""\.get\(["']n["']\)\s*&&\s*\([a-zA-Z0-9$]+\s*=\s*([a-zA-Z0-9$]+)(?:\[(\d+)\])?\("""),
+        // Pattern 4: String.fromCharCode(110) variant (110 = 'n')
         Regex("""\(\s*([a-zA-Z0-9$]+)\s*=\s*String\.fromCharCode\(110\)"""),
-        // Pattern 4: enhanced_except_ function pattern
+        // Pattern 5: enhanced_except_ function pattern
+        Regex("""([a-zA-Z0-9$]+)\s*=\s*function\([a-zA-Z0-9$]+,\s*[a-zA-Z0-9$]+,\s*[a-zA-Z0-9$]+\)\s*\{[^}]*enhanced_except_"""),
+        Regex("""([a-zA-Z0-9$]+)\s*=\s*function\([a-zA-Z0-9$]+,\s*[a-zA-Z0-9$]+\)\s*\{[^}]*enhanced_except_"""),
         Regex("""([a-zA-Z0-9$]+)\s*=\s*function\([a-zA-Z0-9]\)\s*\{[^}]*?enhanced_except_"""),
     )
 

@@ -1,7 +1,12 @@
 package com.music.spotui.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +53,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -148,6 +159,10 @@ fun MiniPlayer(navController: NavHostController) {
 
 
     val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
+    var totalDragX by remember { mutableFloatStateOf(0f) }
+    var totalDragY by remember { mutableFloatStateOf(0f) }
+    val offsetX = remember { Animatable(0f) }
 
     Column(
         modifier = Modifier
@@ -157,12 +172,66 @@ fun MiniPlayer(navController: NavHostController) {
             .padding(8.dp, 0.dp)
             .clipToBounds()
             .pointerInput(Unit) {
-                detectVerticalDragGestures { _, dragAmount ->
-                    if (dragAmount < -10f) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        navController.navigate(Routes.Player.route)
+                detectDragGestures(
+                    onDragStart = {
+                        totalDragX = 0f
+                        totalDragY = 0f
+                    },
+                    onDragEnd = {
+                        coroutineScope.launch {
+                            val absX = abs(totalDragX)
+                            val absY = abs(totalDragY)
+                            if (absX > absY && absX > 120f) {
+                                if (totalDragX < 0) {
+                                    // Swipe left -> Skip to Next Track
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    offsetX.animateTo(-120f, tween(100))
+                                    SongPlayer.skipToNextTrack(context, forceNextIfRepeat = true)
+                                    offsetX.snapTo(120f)
+                                    offsetX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow))
+                                } else {
+                                    // Swipe right -> Skip to Previous Track
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    offsetX.animateTo(120f, tween(100))
+                                    SongPlayer.skipToPreviousTrack(context)
+                                    offsetX.snapTo(-120f)
+                                    offsetX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow))
+                                }
+                            } else if (totalDragY < -50f && absY >= absX) {
+                                // Swipe up -> Open Full Player
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                navController.navigate(Routes.Player.route)
+                                offsetX.animateTo(0f)
+                            } else if (absX < 25f && absY < 25f) {
+                                // Clean tap fallback -> Open Full Player
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                navController.navigate(Routes.Player.route)
+                                offsetX.animateTo(0f)
+                            } else {
+                                offsetX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium))
+                            }
+                            totalDragX = 0f
+                            totalDragY = 0f
+                        }
+                    },
+                    onDragCancel = {
+                        coroutineScope.launch {
+                            offsetX.animateTo(0f)
+                            totalDragX = 0f
+                            totalDragY = 0f
+                        }
+                    },
+                    onDrag = { change, dragAmount ->
+                        totalDragX += dragAmount.x
+                        totalDragY += dragAmount.y
+                        if (abs(totalDragX) > abs(totalDragY) && abs(totalDragX) > 20f) {
+                            change.consume()
+                            coroutineScope.launch {
+                                offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-140f, 140f))
+                            }
+                        }
                     }
-                }
+                )
             }
     ) {
         Row(horizontalArrangement = Arrangement.SpaceBetween,
@@ -183,6 +252,7 @@ fun MiniPlayer(navController: NavHostController) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .width(260.dp)
+                    .offset { IntOffset(offsetX.value.roundToInt(), 0) }
                     .clipToBounds()
             ) {
                 GlideImage(

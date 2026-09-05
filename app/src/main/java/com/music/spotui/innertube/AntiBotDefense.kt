@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.YouTubeClient
-import com.metrolist.innertube.models.YouTubeClient.Companion.IOS
+import com.metrolist.innertube.models.YouTubeClient.Companion.ANDROID_VR_NO_AUTH
 import com.metrolist.innertube.models.YouTubeClient.Companion.TVHTML5_SIMPLY_EMBEDDED_PLAYER
 import com.metrolist.innertube.models.YouTubeClient.Companion.WEB
 import com.metrolist.innertube.models.YouTubeClient.Companion.WEB_REMIX
@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *    to eliminate throttling on direct audio streams.
  * 2. PoToken (Proof of Origin Token) Engine: Generates and persists Web/Android attestation tokens.
  * 3. Visitor Data Header Sync: Caches and maintains persistent `X-Goog-Visitor-Id` across requests.
- * 4. Client Impersonation Rotation: Cascade failover across WEB_REMIX -> IOS -> TVHTML5_SIMPLY_EMBEDDED_PLAYER -> WEB.
+ * 4. Client Impersonation Rotation: Cascade failover across ANDROID_VR_NO_AUTH -> TVHTML5_SIMPLY_EMBEDDED_PLAYER -> WEB_REMIX -> WEB.
  */
 object AntiBotDefense {
 
@@ -31,9 +31,9 @@ object AntiBotDefense {
     private const val KEY_PO_TOKEN_TIMESTAMP = "po_token_timestamp"
 
     private val clientRotationList = listOf(
-        WEB_REMIX,
-        IOS,
+        ANDROID_VR_NO_AUTH,
         TVHTML5_SIMPLY_EMBEDDED_PLAYER,
+        WEB_REMIX,
         WEB
     )
 

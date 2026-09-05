@@ -178,11 +178,14 @@ class TrackResolver {
         strict: Boolean,
         allowVideos: Boolean
     ): Double {
-        val durationDiff = abs(target.durationMs - candidate.durationMs)
+        val hasDuration = target.durationMs > 0 && candidate.durationMs > 0
+        val durationDiff = if (hasDuration) abs(target.durationMs - candidate.durationMs) else 0L
 
         // Strict duration gate
-        if (strict && durationDiff > 3500) return 0.0
-        if (!strict && durationDiff > 25000 && !allowVideos) return 0.0
+        if (hasDuration) {
+            if (strict && durationDiff > 3500) return 0.0
+            if (!strict && durationDiff > 25000 && !allowVideos) return 0.0
+        }
 
         val titleSim = StringSimilarity.levenshteinRatio(
             sanitizeTitle(target.title),
@@ -212,17 +215,20 @@ class TrackResolver {
             }
         }
 
-        // Apply duration penalty
-        val durationPenalty = (durationDiff / 200.0)
-        score -= durationPenalty
+        // Apply duration penalty only if duration is known
+        if (hasDuration) {
+            val durationPenalty = (durationDiff / 200.0)
+            score -= durationPenalty
+        }
 
         return score.coerceAtLeast(0.0)
     }
 
     fun calculatePermissiveScore(target: TrackTarget, candidate: Candidate): Double {
-        val titleSim = StringSimilarity.levenshteinRatio(target.title.lowercase(), candidate.title.lowercase())
-        val durationDiff = abs(target.durationMs - candidate.durationMs)
-        return (titleSim * 70.0) - (durationDiff / 1000.0)
+        val titleSim = StringSimilarity.levenshteinRatio(sanitizeTitle(target.title).lowercase(), sanitizeTitle(candidate.title).lowercase())
+        val hasDuration = target.durationMs > 0 && candidate.durationMs > 0
+        val durationPenalty = if (hasDuration) abs(target.durationMs - candidate.durationMs) / 1000.0 else 0.0
+        return (titleSim * 70.0 - durationPenalty).coerceAtLeast(0.0)
     }
 
     fun sanitizeTitle(title: String): String {

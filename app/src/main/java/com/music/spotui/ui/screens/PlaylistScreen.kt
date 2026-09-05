@@ -624,7 +624,7 @@ fun PlaylistScreen(navController: NavController, playlistId: String, playlistNam
                         }
 
                         // Batch download progress banner
-                        if (isBatchDownloading && playlistBatch != null) {
+                        if (playlistBatch != null && playlistBatch.isDownloading) {
                             Card(
                                 shape = RoundedCornerShape(10.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),

@@ -144,6 +144,11 @@ data class YouTubeClient(
             clientVersion = "19.49.34",
             clientId = "3",
             userAgent = "com.google.android.youtube/19.49.34 (Linux; U; Android 14; en_US; Pixel 8) gzip",
+            osName = "Android",
+            osVersion = "14",
+            deviceMake = "Google",
+            deviceModel = "Pixel 8",
+            androidSdkVersion = "34",
             friendlyName = "Android No SDK",
             loginSupported = false,
             useSignatureTimestamp = false
@@ -154,6 +159,14 @@ data class YouTubeClient(
             clientVersion = "1.54.19",
             clientId = "28",
             userAgent = "com.google.android.apps.youtube.vr.oculus/1.54.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/120.0.6099.199)",
+            osName = "Android",
+            osVersion = "12",
+            deviceMake = "Oculus",
+            deviceModel = "Quest 3",
+            androidSdkVersion = "32",
+            buildId = "SQ3A.220605.009.A1",
+            cronetVersion = "120.0.6099.199",
+            packageName = "com.google.android.apps.youtube.vr.oculus",
             loginSupported = false,
             useSignatureTimestamp = false
         )

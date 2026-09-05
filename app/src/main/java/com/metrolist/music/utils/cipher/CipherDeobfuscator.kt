@@ -124,7 +124,7 @@ object CipherDeobfuscator {
         val (playerJs, hash) = result
 
         // Extract signature function info
-        val sigInfo = FunctionNameExtractor.extractSigFunctionInfo(playerJs)
+        val sigInfo = FunctionNameExtractor.extractSigFunctionInfo(playerJs, hash)
 
         if (sigInfo == null) {
             Timber.tag(TAG).e("Could not extract signature function info from player JS")
@@ -132,7 +132,7 @@ object CipherDeobfuscator {
         }
 
         // Extract n-transform function info (for throttle avoidance / 403 fix)
-        val nFuncInfo = FunctionNameExtractor.extractNFunctionInfo(playerJs)
+        val nFuncInfo = FunctionNameExtractor.extractNFunctionInfo(playerJs, hash)
         if (nFuncInfo == null) {
             Timber.tag(TAG).e("Could not extract n-function info from player JS (will try brute-force)")
         }

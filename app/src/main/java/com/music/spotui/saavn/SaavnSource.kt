@@ -68,7 +68,7 @@ object SaavnSource {
                     val jsonStr = httpGet(urlStr) ?: continue
                     val json = JSONObject(jsonStr)
                     val data = json.optJSONObject("data") ?: json
-                    val results = data.optJSONArray("results") ?: continue
+                    val results = data.optJSONArray("results") ?: data.optJSONArray("songs") ?: json.optJSONArray("data") ?: continue
 
                     var bestMatch: SaavnTrack? = null
                     var bestScore = 0.0

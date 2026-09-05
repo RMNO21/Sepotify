@@ -26,7 +26,7 @@ import javax.inject.Singleton
 @Singleton
 class AppRepository @Inject constructor(
     private val api: Api,
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "AppRepository"

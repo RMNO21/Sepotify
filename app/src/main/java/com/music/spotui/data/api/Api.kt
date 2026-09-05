@@ -30,7 +30,7 @@ import javax.inject.Inject
  * Ensures instant startup, cached offline browsing, and seamless zero-delay local playback.
  */
 class Api @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
 ) {
     private fun stableId(key: String): Int = key.hashCode() and 0x7fffffff
 
@@ -144,15 +144,36 @@ class Api @Inject constructor(
             if (HomeCache.artists == null) emit(Response.Success(emptyList()))
             return@flow
         }
+        // First try GraphQL myArtists (supported on all token types without REST 429 rate limiting)
+        val myArtistsResult = Spotify.myArtists(limit = 20)
+        if (myArtistsResult.isSuccess && myArtistsResult.getOrNull()?.items?.isNotEmpty() == true) {
+            val list = myArtistsResult.getOrNull()!!.items.map { it.toArtistModel() }
+            HomeCache.artists = list
+            emit(Response.Success(list))
+            return@flow
+        }
+
+        // Fallback: topArtists REST endpoint or extracting from home/newReleases
         Spotify.topArtists(limit = 20).fold(
             onSuccess = { paging ->
                 val list = paging.items.map { it.toArtistModel() }
                 HomeCache.artists = list
                 emit(Response.Success(list))
             },
-            onFailure = {
-                Log.e("Api", "getArtists failed", it)
-                if (HomeCache.artists == null) emit(Response.Success(emptyList()))
+            onFailure = { err ->
+                Log.w("Api", "getArtists fallback: ${err.message}")
+                val fallbackArtists = HomeCache.home?.sections?.flatMap { it.items }
+                    ?.filterIsInstance<HomeItem.Artist>()
+                    ?.map { ArtistsModel(name = it.name, coverUri = it.imageUrl, id = it.id) }
+                    ?.distinctBy { it.id.ifBlank { it.name } }
+                    .orEmpty()
+
+                if (fallbackArtists.isNotEmpty()) {
+                    HomeCache.artists = fallbackArtists
+                    emit(Response.Success(fallbackArtists))
+                } else if (HomeCache.artists == null) {
+                    emit(Response.Success(emptyList()))
+                }
             },
         )
     }
@@ -165,10 +186,22 @@ class Api @Inject constructor(
             emit(Response.Success(downloaded))
             return@flow
         }
+
+        // First try GraphQL likedSongs (fast, reliable, not subject to REST 429 rate limiting)
+        val likedResult = Spotify.likedSongs(limit = 50)
+        if (likedResult.isSuccess && likedResult.getOrNull()?.items?.isNotEmpty() == true) {
+            val list = likedResult.getOrNull()!!.items.mapNotNull { it.track?.toSongModel() }
+            if (list.isNotEmpty()) {
+                emit(Response.Success(list))
+                return@flow
+            }
+        }
+
+        // Fallback: topTracks REST endpoint, or downloaded songs
         Spotify.topTracks(limit = 50).fold(
             onSuccess = { paging -> emit(Response.Success(paging.items.map { it.toSongModel() })) },
-            onFailure = {
-                Log.e("Api", "getSongs failed", it)
+            onFailure = { err ->
+                Log.w("Api", "getSongs: topTracks unavailable (${err.message}), serving downloaded/cached songs")
                 val downloaded = com.music.spotui.data.preferences.getDownloadedSongs(context)
                 emit(Response.Success(downloaded))
             },

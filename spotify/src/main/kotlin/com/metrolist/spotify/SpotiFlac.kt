@@ -239,8 +239,9 @@ object SpotiFlac {
             }
         }
 
+        val cooldown = sawCooldown
         return when {
-            sawCooldown != null -> Result.Cooldown(sawCooldown)
+            cooldown != null -> Result.Cooldown(cooldown)
             !sawMatch -> Result.NotFound
             else -> Result.NotFound
         }

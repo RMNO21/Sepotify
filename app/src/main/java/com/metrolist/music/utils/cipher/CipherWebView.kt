@@ -154,14 +154,38 @@ class CipherWebView private constructor(
 
         val modifiedJs = if (exports.isNotEmpty()) {
             val exportCode = "; " + exports.joinToString(" ")
-            val modified = playerJs.replace("})(_yt_player);", "$exportCode })(_yt_player);")
-            if (modified == playerJs) {
-                Timber.tag(TAG).w("Export injection point '})(_yt_player);' not found, appending exports")
-                playerJs + "\n" + exportCode
-            } else {
-                Timber.tag(TAG).d("Exports injected into IIFE closure")
-                modified
+            var modified = playerJs
+            val closureEndPatterns = listOf(
+                "})(_yt_player);",
+                "})(_yt_player)",
+                "})(this._yt_player",
+                "})(window._yt_player",
+                "})(g);",
+                "})(g)",
+                "})(_yt_player = window._yt_player || {});",
+                "})()",
+                "})();"
+            )
+            var injected = false
+            for (pat in closureEndPatterns) {
+                if (modified.contains(pat)) {
+                    modified = modified.replace(pat, "$exportCode $pat")
+                    injected = true
+                    Timber.tag(TAG).d("Exports injected into IIFE closure matching '$pat'")
+                    break
+                }
             }
+            if (!injected) {
+                val lastClose = modified.lastIndexOf("})")
+                if (lastClose > 0) {
+                    modified = modified.substring(0, lastClose) + " $exportCode " + modified.substring(lastClose)
+                    Timber.tag(TAG).d("Exports injected near last '})' at index $lastClose")
+                } else {
+                    Timber.tag(TAG).w("Export injection point not found, appending exports at end")
+                    modified = modified + "\n" + exportCode
+                }
+            }
+            modified
         } else {
             Timber.tag(TAG).w("No exports to inject")
             playerJs

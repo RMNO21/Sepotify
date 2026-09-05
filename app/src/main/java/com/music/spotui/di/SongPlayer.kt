@@ -335,6 +335,7 @@ object SongPlayer {
 
     @Volatile private var consecutiveFailures = 0
     @Volatile private var lastSkipTimestamp = 0L
+    @Volatile private var isClearingForNewSong = false
 
     fun playSong(song: String, context: Context) {
         val appContext = context.applicationContext
@@ -349,8 +350,9 @@ object SongPlayer {
         // Do not keep the previous track audible while this request resolves.
         // Otherwise the UI can show the newly tapped track while old audio keeps
         // playing for several seconds, or forever if resolution fails.
+        isClearingForNewSong = true
         runCatching {
-            player?.pause()
+            player?.stop()
             player?.clearMediaItems()
         }
 
@@ -383,6 +385,15 @@ object SongPlayer {
             consecutiveFailures = 0
             currentSource = "Downloaded"
             currentQuality = downloadedPath.substringAfterLast('.', "").uppercase()
+            com.music.spotui.debug.PlaybackDebugLogger.activeSongQuery = song
+            com.music.spotui.debug.PlaybackDebugLogger.activeSource = "Downloaded"
+            com.music.spotui.debug.PlaybackDebugLogger.activeQuality = currentQuality
+            com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Local Storage"
+            com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Local file"
+            com.music.spotui.debug.PlaybackDebugLogger.activeFormatItag = 0
+            com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = "audio/local"
+            com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = 320000
+            com.music.spotui.debug.PlaybackDebugLogger.lastExoPlayerError = "None"
             _playbackStatus.value = PlaybackStatus.Playing("Downloaded", currentQuality)
             ensurePlayer(appContext)
             player!!.setMediaItem(buildMediaItem(android.net.Uri.fromFile(java.io.File(downloadedPath)).toString(), streamMimeType(downloadedPath)))
@@ -424,6 +435,16 @@ object SongPlayer {
         }
         scope.launch {
             try {
+                com.music.spotui.debug.PlaybackDebugLogger.activeSongQuery = song
+                com.music.spotui.debug.PlaybackDebugLogger.activeSource = "Resolving..."
+                com.music.spotui.debug.PlaybackDebugLogger.activeQuality = ""
+                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Auto"
+                com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Resolving..."
+                com.music.spotui.debug.PlaybackDebugLogger.activeFormatItag = 0
+                com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = ""
+                com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = 0
+                com.music.spotui.debug.PlaybackDebugLogger.lastExoPlayerError = "None"
+                com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "playSong requested for: '$song'")
                 val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(appContext)
                 // In offline mode, check if the track is downloaded. If not, auto-skip safely!
                 if (!isOnline) {
@@ -725,6 +746,47 @@ object SongPlayer {
             .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)
+            .addInterceptor { chain ->
+                val originalRequest = chain.request()
+                val url = originalRequest.url
+                val host = url.host
+                if (host.contains("googlevideo.com") || host.contains("youtube.com")) {
+                    val clientParam = (url.queryParameter("c") ?: url.queryParameter("client"))?.uppercase()
+                    val ua = when {
+                        clientParam == "IOS" || clientParam == "IPADOS" ->
+                            "com.google.ios.youtube/19.49.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)"
+                        clientParam == "ANDROID" || clientParam == "ANDROID_MUSIC" || clientParam == "ANDROID_NO_SDK" ->
+                            "com.google.android.youtube/19.49.34 (Linux; U; Android 14; en_US; Pixel 8) gzip"
+                        clientParam == "ANDROID_VR" ->
+                            "com.google.android.apps.youtube.vr.oculus/1.54.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/120.0.6099.199)"
+                        clientParam == "WEB" || clientParam == "WEB_REMIX" ->
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                        clientParam?.contains("TV") == true ->
+                            "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15"
+                        else ->
+                            "com.google.android.apps.youtube.vr.oculus/1.54.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/120.0.6099.199)"
+                    }
+                    val isWeb = clientParam == "WEB" || clientParam == "WEB_REMIX" || clientParam?.contains("TV") == true
+                    val builder = originalRequest.newBuilder()
+                        .header("User-Agent", ua)
+                    if (isWeb) {
+                        builder.header("Origin", "https://www.youtube.com")
+                            .header("Referer", "https://www.youtube.com/")
+                    }
+                    val req = builder.build()
+                    val rangeHeader = req.header("Range") ?: "none"
+                    com.music.spotui.debug.PlaybackDebugLogger.d("ExoOkHttp", "GET ${host.take(25)}... (c=$clientParam, range=$rangeHeader, ua=${ua.take(20)}...)")
+                    val response = chain.proceed(req)
+                    com.music.spotui.debug.PlaybackDebugLogger.log(
+                        "ExoOkHttp",
+                        "CDN Response code=${response.code} msg=${response.message} (content-length=${response.header("Content-Length")}, range=${response.header("Content-Range")})",
+                        if (response.isSuccessful || response.code == 206) com.music.spotui.debug.PlaybackDebugLogger.LogEntry.Level.INFO else com.music.spotui.debug.PlaybackDebugLogger.LogEntry.Level.ERROR
+                    )
+                    response
+                } else {
+                    chain.proceed(originalRequest)
+                }
+            }
             .build()
     }
 
@@ -904,6 +966,10 @@ object SongPlayer {
             if (forPlayback) {
                 currentSource = cached.source.ifBlank { "YouTube" }
                 currentQuality = cached.quality
+                com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
+                com.music.spotui.debug.PlaybackDebugLogger.activeQuality = cached.quality
+                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "High-Speed Cache"
+                com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via StreamUrlCache ($currentSource / ${cached.quality})")
             }
             return cached.url
         }
@@ -914,6 +980,9 @@ object SongPlayer {
             if (forPlayback) {
                 currentSource = sourceCache[song] ?: "YouTube"
                 currentQuality = qualityCache[song] ?: ""
+                com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
+                com.music.spotui.debug.PlaybackDebugLogger.activeQuality = currentQuality
+                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Stream Memory Cache"
             }
             return it
         }
@@ -942,7 +1011,17 @@ object SongPlayer {
             }
             if (r is com.music.spotui.deezer.DeezerSource.Result.Success) {
                 Log.d(TAG, "Deezer stream resolved (${r.qualityLabel}) for: $song")
-                if (forPlayback) { currentSource = "Deezer"; currentQuality = r.qualityLabel }
+                if (forPlayback) {
+                    currentSource = "Deezer"
+                    currentQuality = r.qualityLabel
+                    com.music.spotui.debug.PlaybackDebugLogger.activeSource = "Deezer"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeQuality = r.qualityLabel
+                    com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Deezer CDN"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Direct Audio"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = if (r.qualityLabel.contains("FLAC")) "audio/flac" else "audio/mp3"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = if (r.qualityLabel.contains("FLAC")) 1411000 else 320000
+                    com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via Deezer (${r.qualityLabel})")
+                }
                 streamCache[song] = r.uri
                 sourceCache[song] = "Deezer"
                 qualityCache[song] = r.qualityLabel
@@ -965,6 +1044,13 @@ object SongPlayer {
                     if (forPlayback) {
                         currentSource = "Lossless • ${r.track.provider}"
                         currentQuality = flacQuality
+                        com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
+                        com.music.spotui.debug.PlaybackDebugLogger.activeQuality = flacQuality
+                        com.music.spotui.debug.PlaybackDebugLogger.activeClient = r.track.provider
+                        com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Lossless Stream"
+                        com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = "audio/flac"
+                        com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = 1411000
+                        com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via Lossless (${r.track.provider} $flacQuality)")
                     }
                     streamCache[song] = r.track.url
                     sourceCache[song] = "Lossless • ${r.track.provider}"
@@ -995,6 +1081,13 @@ object SongPlayer {
                 if (forPlayback) {
                     currentSource = "Saavn"
                     currentQuality = qLabel
+                    com.music.spotui.debug.PlaybackDebugLogger.activeSource = "Saavn"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeQuality = qLabel
+                    com.music.spotui.debug.PlaybackDebugLogger.activeClient = "JioSaavn CDN"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Direct Audio"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = "audio/mp4"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = 320000
+                    com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via JioSaavn ($qLabel)")
                 }
                 streamCache[song] = saavnRes.track.url
                 sourceCache[song] = "Saavn"
@@ -1021,7 +1114,15 @@ object SongPlayer {
             .uppercase()
         val ytQuality = listOf(codec, "${playback.format.bitrate / 1000} kbps")
             .filter { it.isNotBlank() }.joinToString(" ")
-        if (forPlayback) currentQuality = ytQuality
+        if (forPlayback) {
+            currentQuality = ytQuality
+            com.music.spotui.debug.PlaybackDebugLogger.activeSource = "YouTube"
+            com.music.spotui.debug.PlaybackDebugLogger.activeQuality = ytQuality
+            com.music.spotui.debug.PlaybackDebugLogger.activeFormatItag = playback.format.itag
+            com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = playback.format.mimeType
+            com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = playback.format.bitrate
+            com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via YouTube (${playback.format.itag} / $ytQuality)")
+        }
         streamCache[song] = playback.streamUrl
         sourceCache[song] = "YouTube"
         qualityCache[song] = ytQuality
@@ -2176,6 +2277,7 @@ object SongPlayer {
                     ).fold(
                         onSuccess = {
                             activeResolvedVideoId[query] = videoId
+                            com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = videoId
                             return it
                         },
                         onFailure = { Log.w(TAG, "stream failed for $videoId @ quality ${audioQuality.name} (${it.message})") },
@@ -2191,6 +2293,7 @@ object SongPlayer {
                         ).fold(
                             onSuccess = {
                                 activeResolvedVideoId[query] = videoId
+                                com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = videoId
                                 return it
                             },
                             onFailure = { Log.w(TAG, "stream failed for $videoId @ AUTO (${it.message})") },
@@ -2200,13 +2303,63 @@ object SongPlayer {
             }
             return null
         }
-        tryIds(resolveVideoCandidates(query).take(4))?.let { return it }
+        val candidateSongIds = resolveVideoCandidates(query).take(6)
+        tryIds(candidateSongIds)?.let { return it }
+
+        // If InnerTube player failed on all candidate IDs, attempt direct Piped resolution
+        for (videoId in candidateSongIds) {
+            if (videoId in failedIds) continue
+            val piped = com.music.spotui.piped.PipedSource.resolveAudioStream(videoId)
+            if (piped != null) {
+                Log.d(TAG, "Recovered YouTube stream via Piped fallback for videoId=$videoId")
+                activeResolvedVideoId[query] = videoId
+                com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = videoId
+                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Piped Fallback"
+                return YTPlayerUtils.PlaybackData(
+                    audioConfig = null,
+                    videoDetails = null,
+                    playbackTracking = null,
+                    format = com.metrolist.innertube.models.response.PlayerResponse.StreamingData.Format(
+                        itag = 251,
+                        url = piped.url,
+                        mimeType = piped.mimeType,
+                        bitrate = piped.bitrate,
+                    ),
+                    streamUrl = piped.url,
+                    streamExpiresInSeconds = 21600,
+                )
+            }
+        }
+
         if (!com.music.spotui.data.preferences.isVideoFallbackEnabled(appContext)) {
             Log.w(TAG, "song candidates exhausted and video fallback disabled for: ${searchTextForPlayback(query)}")
             return null
         }
         Log.w(TAG, "song candidates exhausted, trying video search for: ${searchTextForPlayback(query)}")
-        tryIds(resolveVideoCandidates(query, YouTube.SearchFilter.FILTER_VIDEO).take(4))?.let { return it }
+        val candidateVideoIds = resolveVideoCandidates(query, YouTube.SearchFilter.FILTER_VIDEO).take(4)
+        tryIds(candidateVideoIds)?.let { return it }
+
+        for (videoId in candidateVideoIds) {
+            if (videoId in failedIds) continue
+            val piped = com.music.spotui.piped.PipedSource.resolveAudioStream(videoId)
+            if (piped != null) {
+                Log.d(TAG, "Recovered YouTube video stream via Piped fallback for videoId=$videoId")
+                activeResolvedVideoId[query] = videoId
+                return YTPlayerUtils.PlaybackData(
+                    audioConfig = null,
+                    videoDetails = null,
+                    playbackTracking = null,
+                    format = com.metrolist.innertube.models.response.PlayerResponse.StreamingData.Format(
+                        itag = 251,
+                        url = piped.url,
+                        mimeType = piped.mimeType,
+                        bitrate = piped.bitrate,
+                    ),
+                    streamUrl = piped.url,
+                    streamExpiresInSeconds = 21600,
+                )
+            }
+        }
         Log.e(TAG, "All YouTube candidates failed for: ${searchTextForPlayback(query)}")
         return null
     }
@@ -2289,6 +2442,15 @@ object SongPlayer {
         if (handleAudioFocus) {
             p.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    val stateStr = when (playbackState) {
+                        androidx.media3.common.Player.STATE_BUFFERING -> "BUFFERING"
+                        androidx.media3.common.Player.STATE_READY -> "READY"
+                        androidx.media3.common.Player.STATE_ENDED -> "ENDED"
+                        androidx.media3.common.Player.STATE_IDLE -> "IDLE"
+                        else -> "UNKNOWN($playbackState)"
+                    }
+                    com.music.spotui.debug.PlaybackDebugLogger.lastExoPlayerState = stateStr
+                    com.music.spotui.debug.PlaybackDebugLogger.d("ExoPlayer", "State changed -> $stateStr (playWhenReady=${p.playWhenReady}, isPlaying=${p.isPlaying}, pos=${p.currentPosition}ms)")
                     when (playbackState) {
                         androidx.media3.common.Player.STATE_BUFFERING -> {
                             val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
@@ -2307,6 +2469,7 @@ object SongPlayer {
                             }
                         }
                         androidx.media3.common.Player.STATE_READY -> {
+                            isClearingForNewSong = false
                             consecutiveFailures = 0
                             if (p.playWhenReady) {
                                 if (p.isPlaying) {
@@ -2322,6 +2485,11 @@ object SongPlayer {
                         }
                         androidx.media3.common.Player.STATE_ENDED -> {
                             _playbackStatus.value = PlaybackStatus.Idle
+                            // Ignore STATE_ENDED if the player was cleared for a new track, or has no media items
+                            if (isClearingForNewSong || p.mediaItemCount == 0) {
+                                Log.d(TAG, "Ignoring STATE_ENDED because player was cleared or is loading a new song (mediaItemCount=${p.mediaItemCount})")
+                                return
+                            }
                             scope.launch(Dispatchers.Main) {
                                 val state = boundState ?: CurrentSongState.instance
                                 if (state != null && state.repeat.value) {
@@ -2384,7 +2552,11 @@ object SongPlayer {
                 }
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    isClearingForNewSong = false
                     Log.e(TAG, "ExoPlayer error occurred: ${error.errorCodeName} / ${error.message}", error)
+                    val errText = "${error.errorCodeName} (code=${error.errorCode}): ${error.message ?: "Unknown"}"
+                    com.music.spotui.debug.PlaybackDebugLogger.lastExoPlayerError = errText
+                    com.music.spotui.debug.PlaybackDebugLogger.e("ExoPlayer", "FATAL PLAYER ERROR: $errText", error)
                     val song = currentRequest
                     if (song.isNotBlank()) {
                         if (currentSource.startsWith("Deezer")) {
@@ -2398,8 +2570,12 @@ object SongPlayer {
                             failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
                         } else if (currentSource.contains("YouTube") || currentSource.contains("Piped")) {
                             activeResolvedVideoId[song]?.let { badVid ->
-                                Log.w(TAG, "YouTube/Piped playback error for $song (videoId=$badVid) — blacklisting candidate")
-                                failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                if (reconnectAttempt >= 2) {
+                                    Log.w(TAG, "YouTube/Piped playback error for $song (videoId=$badVid) after retries — blacklisting candidate")
+                                    failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                } else {
+                                    Log.w(TAG, "YouTube/Piped stream error for $song (videoId=$badVid) — invalidating stream for retry")
+                                }
                             }
                         }
                         invalidateResolvedStream(song)
@@ -2626,7 +2802,9 @@ object SongPlayer {
                                         failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
                                     } else if (currentSource.startsWith("YouTube") || currentSource.startsWith("Streamed")) {
                                         activeResolvedVideoId[song]?.let { badVid ->
-                                            failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                            if (reconnectAttempt >= 2) {
+                                                failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                            }
                                         }
                                     }
                                     triggerReconnect(ctx)

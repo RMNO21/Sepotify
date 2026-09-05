@@ -56,6 +56,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -76,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -282,7 +284,7 @@ fun PlayerScreen(navController: NavController) {
     // The queue is whatever list the user actually started playing (album tracks,
     // search results, liked songs) — stored when the song was tapped. Falling back
     // to the global top-tracks feed used to crash / be empty (it's rate-limited).
-    val queueSongs = playerViewModel.queue.value
+    val queueSongs by playerViewModel.queueFlow.collectAsState()
 
     // ── Now-playing swipe pager ──
     // Index of the playing track in the queue (fallback to 0 so the pager is valid
@@ -300,19 +302,30 @@ fun PlayerScreen(navController: NavController) {
             artworkPagerState.currentPage != currentIndex &&
             !artworkPagerState.isScrollInProgress
         ) {
-            artworkPagerState.scrollToPage(currentIndex)
+            artworkPagerState.animateScrollToPage(currentIndex)
         }
     }
-    // User settled the pager on a different page → play that track. Compare against the
-    // live current id (not currentIndex captured above) to avoid a replay feedback loop.
-    LaunchedEffect(artworkPagerState, queueSongs) {
+    // User settled the pager on a different page via deliberate swipe -> play that track.
+    var isUserSwipe by remember { mutableStateOf(false) }
+    LaunchedEffect(artworkPagerState.interactionSource) {
+        artworkPagerState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is androidx.compose.foundation.interaction.DragInteraction.Start -> isUserSwipe = true
+            }
+        }
+    }
+
+    LaunchedEffect(artworkPagerState) {
         snapshotFlow { artworkPagerState.settledPage }
             .distinctUntilChanged()
             .collect { page ->
-                queueSongs.getOrNull(page)?.let { target ->
-                    if (target.id != playerViewModel.currentSongId.value) {
-                        playerViewModel.playSongAt(queueSongs, page, context)
-                        isLiked.value = isSongLiked(context, target.id.toString())
+                if (isUserSwipe) {
+                    isUserSwipe = false
+                    queueSongs.getOrNull(page)?.let { target ->
+                        if (target.id != playerViewModel.currentSongId.value) {
+                            playerViewModel.playSongAt(queueSongs, page, context)
+                            isLiked.value = isSongLiked(context, target.id.toString())
+                        }
                     }
                 }
             }
@@ -490,15 +503,35 @@ fun PlayerScreen(navController: NavController) {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                if (queueSongs.isEmpty()) {
+                if (queueSongs.size <= 1) {
+                    var dragTotalX by remember { mutableFloatStateOf(0f) }
                     GlideImage(
                         modifier = Modifier
                             .sizeIn(maxWidth = 385.dp, maxHeight = 385.dp)
                             .aspectRatio(1f)
                             .padding(20.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .alpha(artworkAlpha),
-                        model = songCoverUri,
+                            .alpha(artworkAlpha)
+                            .pointerInput(Unit) {
+                                detectHorizontalDragGestures(
+                                    onDragStart = { dragTotalX = 0f },
+                                    onDragEnd = {
+                                        if (dragTotalX < -150f) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            SongPlayer.skipToNextTrack(context, forceNextIfRepeat = true)
+                                        } else if (dragTotalX > 150f) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            SongPlayer.skipToPreviousTrack(context)
+                                        }
+                                        dragTotalX = 0f
+                                    },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragTotalX += dragAmount
+                                    }
+                                )
+                            },
+                        model = queueSongs.firstOrNull()?.coverUri ?: songCoverUri,
                         contentScale = ContentScale.Crop,
                         contentDescription = "")
                 } else {
@@ -739,6 +772,7 @@ fun PlayerInfo(
     var snackbarVisible by remember {
         mutableStateOf(false)
     }
+    val haptic = LocalHapticFeedback.current
 
     LaunchedEffect(snackbarVisible) {
         delay(1500)
@@ -764,13 +798,10 @@ fun PlayerInfo(
             modifier = Modifier
                 .width(270.dp)
         ) {
-//                        GlideImage(
-//                            modifier = Modifier.size(60.dp),
-//                            model = albumSongs[song].coverUri,
-//                            contentScale = ContentScale.Crop,
-//                            contentDescription = ""
-//                        )
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
                 Text(
                     modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE),
                     text = songTitle,
@@ -1996,7 +2027,6 @@ private fun CanvasVideo(
                 controllerAutoShow = false
                 setShowBuffering(androidx.media3.ui.PlayerView.SHOW_BUFFERING_NEVER)
                 setArtworkDisplayMode(androidx.media3.ui.PlayerView.ARTWORK_DISPLAY_MODE_OFF)
-                setUseArtwork(false)
                 setDefaultArtwork(null)
                 hideController()
                 resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM

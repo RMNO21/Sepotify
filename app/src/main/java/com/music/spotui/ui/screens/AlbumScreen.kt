@@ -377,7 +377,7 @@ fun SumUpAlbumScreen(
                             var albumDownloaded by remember(albumSongs, batchDownloads) {
                                 mutableStateOf(SongPlayer.allDownloaded(albumSongs, context))
                             }
-                            if (isAlbumDownloading && albumBatch != null) {
+                            if (albumBatch != null && albumBatch.isDownloading) {
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier

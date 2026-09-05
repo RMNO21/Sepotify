@@ -130,3 +130,10 @@ fun formatBytesHumanReadable(bytes: Long): String {
         else -> String.format(java.util.Locale.US, "%.1f KB", kb)
     }
 }
+
+private const val KEY_DEBUG_MODE = "debug_mode_enabled"
+fun isDebugModeEnabled(c: Context): Boolean = prefs(c).getBoolean(KEY_DEBUG_MODE, false)
+fun setDebugModeEnabled(c: Context, v: Boolean) {
+    prefs(c).edit().putBoolean(KEY_DEBUG_MODE, v).apply()
+    com.music.spotui.debug.PlaybackDebugLogger.isDebugEnabledFlow.value = v
+}

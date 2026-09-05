@@ -250,7 +250,7 @@ fun LikedSongsScreen(navController: NavController) {
                                 .padding(20.dp, 0.dp)
                         ) {
                             if (songs.isNotEmpty()) {
-                                if (isLikedDownloading && likedBatch != null) {
+                                if (likedBatch != null && likedBatch.isDownloading) {
                                     Box(
                                         contentAlignment = Alignment.Center,
                                         modifier = Modifier
@@ -370,7 +370,7 @@ fun LikedSongsScreen(navController: NavController) {
                         }
 
                         // Batch download progress banner
-                        if (isLikedDownloading && likedBatch != null) {
+                        if (likedBatch != null && likedBatch.isDownloading) {
                             Card(
                                 shape = RoundedCornerShape(10.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),

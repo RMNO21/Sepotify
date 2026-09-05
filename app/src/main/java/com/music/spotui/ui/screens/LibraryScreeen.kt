@@ -1212,7 +1212,7 @@ fun SumUpLibraryScreen(
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    if (isBatchDownloading && activeBatch != null) {
+                    if (activeBatch != null && activeBatch.isDownloading) {
                         Spacer(modifier = Modifier.height(4.dp))
                         androidx.compose.material3.LinearProgressIndicator(
                             progress = { (activeBatch.progressPercent.coerceIn(0, 100)) / 100f },

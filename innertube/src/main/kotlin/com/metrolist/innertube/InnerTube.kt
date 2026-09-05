@@ -256,7 +256,32 @@ class InnerTube {
 
     suspend fun getSwJsData() = withRetry { httpClient.get("https://music.youtube.com/sw.js_data") }
 
-    
+    suspend fun validateSession(client: YouTubeClient = YouTubeClient.WEB_REMIX): Result<Boolean> = runCatching {
+        if (cookie.isNullOrBlank()) {
+            return@runCatching true
+        }
+        val response = httpClient.post(client.apiUrl + "search") {
+            ytClient(client, setLogin = true)
+            setBody(
+                SearchBody(
+                    context = client.toContext(
+                        locale,
+                        visitorData,
+                        dataSyncId
+                    ),
+                    query = "music",
+                    params = null
+                )
+            )
+        }
+        val statusCode = response.status.value
+        val text = response.bodyAsText()
+        statusCode in 200..299 &&
+            !text.contains("LOGIN_REQUIRED") &&
+            !text.contains("INVALID_CREDENTIALS") &&
+            !text.contains("UNAUTHENTICATED")
+    }
+
     private suspend fun returnYouTubeDislike(videoId: String) = withRetry {
         httpClient.get("https://returnyoutubedislikeapi.com/Votes?videoId=$videoId") {
             contentType(ContentType.Application.Json)
