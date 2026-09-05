@@ -45,27 +45,22 @@ jobs:
       - name: Prepare APK Asset
         run: |
           mkdir -p release-assets
-          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           cp app/build/outputs/apk/release/*.apk release-assets/sepotify.apk
-          cp app/build/outputs/apk/release/*.apk release-assets/Sepotify.apk
-          cp app/build/outputs/apk/release/*.apk "release-assets/sepotify-${TAG}.apk"
-          cp app/build/outputs/apk/release/*.apk "release-assets/Sepotify-${TAG}.apk"
-          cp app/build/outputs/apk/release/*.apk release-assets/Sepotifyy.apk
-          cp app/build/outputs/apk/release/*.apk "release-assets/Sepotifyy-${TAG}.apk"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         with:
-          files: |
-            release-assets/*.apk
+          files: release-assets/sepotify.apk
           generate_release_notes: true
           tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sepotifyy-APK
-          path: release-assets/*.apk
+          name: sepotify-APK
+          path: release-assets/sepotify.apk
