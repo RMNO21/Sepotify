@@ -63,6 +63,7 @@ object DeezerSource {
         expectedTitle: String? = null,
         expectedArtist: String? = null,
         expectedDurationSec: Int? = null,
+        preferredStreamQuality: com.music.spotui.data.preferences.StreamQuality? = null,
     ): Resolved? = withContext(Dispatchers.IO) {
         val arl = getDeezerArl(context) ?: return@withContext null
         DeezerSession.setArl(arl)
@@ -95,18 +96,49 @@ object DeezerSource {
 
         val tokens = DeezerSession.trackTokens(deezerId) ?: return@withContext null
 
-        // Try the entitled quality, then degrade until one yields a url.
-        val candidates = when (DeezerSession.entitledQuality) {
-            DeezerSession.QUALITY_FLAC -> listOf(9, 3, 1)
-            DeezerSession.QUALITY_MP3_320 -> listOf(3, 1)
-            else -> listOf(1, 3)
+        // Determine quality candidates honoring user's settings, falling back to lower qualities if needed.
+        val qualitySetting = preferredStreamQuality
+            ?: com.music.spotui.data.preferences.currentStreamingQuality(context)
+
+        val candidates: List<Int> = when (qualitySetting) {
+            com.music.spotui.data.preferences.StreamQuality.LOSSLESS -> {
+                listOf(
+                    DeezerSession.QUALITY_FLAC,
+                    DeezerSession.QUALITY_MP3_320,
+                    DeezerSession.QUALITY_MP3_128,
+                )
+            }
+            com.music.spotui.data.preferences.StreamQuality.HIGH,
+            com.music.spotui.data.preferences.StreamQuality.NORMAL -> {
+                if (DeezerSession.entitledQuality == DeezerSession.QUALITY_FLAC) {
+                    listOf(
+                        DeezerSession.QUALITY_MP3_320,
+                        DeezerSession.QUALITY_FLAC,
+                        DeezerSession.QUALITY_MP3_128,
+                    )
+                } else {
+                    listOf(
+                        DeezerSession.QUALITY_MP3_320,
+                        DeezerSession.QUALITY_MP3_128,
+                    )
+                }
+            }
+            com.music.spotui.data.preferences.StreamQuality.LOW -> {
+                listOf(DeezerSession.QUALITY_MP3_128)
+            }
         }
+
+        Log.d(TAG, "Deezer resolving track '$expectedTitle' with preferred quality=${qualitySetting.name}, candidates=$candidates")
+
         for (q in candidates) {
             val (url, encrypted) = DeezerSession.getTrackUrl(tokens, q)
             if (url != null) {
+                if (q > DeezerSession.entitledQuality) {
+                    DeezerSession.entitledQuality = q
+                }
                 // Persist tier for the settings screen (best-effort).
                 runCatching { setDeezerTier(context, tierLabel(DeezerSession.entitledQuality)) }
-                Log.d(TAG, "Deezer resolved id=${tokens.id} q=$q for track='$expectedTitle'")
+                Log.d(TAG, "Deezer resolved id=${tokens.id} q=$q (${qualityLabel(q)}) for track='$expectedTitle'")
                 return@withContext Resolved(
                     url = url,
                     encrypted = encrypted,
@@ -114,6 +146,8 @@ object DeezerSource {
                     isFlac = q == DeezerSession.QUALITY_FLAC,
                     qualityLabel = qualityLabel(q),
                 )
+            } else {
+                Log.d(TAG, "Deezer format q=$q not available for id=${tokens.id}, trying fallback...")
             }
         }
         null
@@ -128,6 +162,7 @@ object DeezerSource {
         expectedTitle: String? = null,
         expectedArtist: String? = null,
         expectedDurationSec: Int? = null,
+        preferredStreamQuality: com.music.spotui.data.preferences.StreamQuality? = null,
     ): Result {
         if (getDeezerArl(context) == null) return Result.NotLoggedIn
         val raw = resolveRaw(
@@ -138,6 +173,7 @@ object DeezerSource {
             expectedTitle = expectedTitle,
             expectedArtist = expectedArtist,
             expectedDurationSec = expectedDurationSec,
+            preferredStreamQuality = preferredStreamQuality,
         ) ?: return Result.NotFound
         val uri = "deezer://stream" +
             "?u=${URLEncoder.encode(raw.url, "UTF-8")}" +
@@ -155,7 +191,7 @@ object DeezerSource {
 
     private fun tierLabel(q: Int): String = when (q) {
         DeezerSession.QUALITY_FLAC -> "Premium (FLAC)"
-        DeezerSession.QUALITY_MP3_320 -> "Premium (MP3 320)"
-        else -> "Free (MP3 128)"
+        DeezerSession.QUALITY_MP3_320 -> "High Quality (MP3 320)"
+        else -> "Standard (MP3 320 / 128)"
     }
 }

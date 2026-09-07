@@ -961,36 +961,51 @@ object SongPlayer {
             }
         }
 
-        // High-Speed Stream URL LRU Cache (4-hr TTL)
-        com.music.spotui.player.StreamUrlCache.getEntry(song)?.let { cached ->
-            if (forPlayback) {
-                currentSource = cached.source.ifBlank { "YouTube" }
-                currentQuality = cached.quality
-                com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
-                com.music.spotui.debug.PlaybackDebugLogger.activeQuality = cached.quality
-                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "High-Speed Cache"
-                com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via StreamUrlCache ($currentSource / ${cached.quality})")
-            }
-            return cached.url
-        }
-
-        streamCache[song]?.let {
-            // Cache hits must still update the badge — returning early kept the
-            // previous track's label (e.g. "Downloaded") on a streamed track.
-            if (forPlayback) {
-                currentSource = sourceCache[song] ?: "YouTube"
-                currentQuality = qualityCache[song] ?: ""
-                com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
-                com.music.spotui.debug.PlaybackDebugLogger.activeQuality = currentQuality
-                com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Stream Memory Cache"
-            }
-            return it
-        }
         // Quality for the current network (Wi-Fi vs cellular), from Settings.
         val quality = com.music.spotui.data.preferences.currentStreamingQuality(appContext)
 
+        // High-Speed Stream URL LRU Cache (4-hr TTL)
+        com.music.spotui.player.StreamUrlCache.getEntry(song)?.let { cached ->
+            val isSuboptimalDeezerCache = cached.source == "Deezer" &&
+                cached.quality.contains("128") &&
+                quality != com.music.spotui.data.preferences.StreamQuality.LOW
+            if (!isSuboptimalDeezerCache) {
+                if (forPlayback) {
+                    currentSource = cached.source.ifBlank { "YouTube" }
+                    currentQuality = cached.quality
+                    com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
+                    com.music.spotui.debug.PlaybackDebugLogger.activeQuality = cached.quality
+                    com.music.spotui.debug.PlaybackDebugLogger.activeClient = "High-Speed Cache"
+                    com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via StreamUrlCache ($currentSource / ${cached.quality})")
+                }
+                return cached.url
+            } else {
+                com.music.spotui.player.StreamUrlCache.remove(song)
+            }
+        }
+
+        streamCache[song]?.let {
+            val isSuboptimalDeezerMem = sourceCache[song] == "Deezer" &&
+                qualityCache[song]?.contains("128") == true &&
+                quality != com.music.spotui.data.preferences.StreamQuality.LOW
+            if (!isSuboptimalDeezerMem) {
+                if (forPlayback) {
+                    currentSource = sourceCache[song] ?: "YouTube"
+                    currentQuality = qualityCache[song] ?: ""
+                    com.music.spotui.debug.PlaybackDebugLogger.activeSource = currentSource
+                    com.music.spotui.debug.PlaybackDebugLogger.activeQuality = currentQuality
+                    com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Stream Memory Cache"
+                }
+                return it
+            } else {
+                streamCache.remove(song)
+                sourceCache.remove(song)
+                qualityCache.remove(song)
+            }
+        }
+
         // Deezer: When configured and enabled, Deezer is the primary streaming engine.
-        // It resolves immediately (FLAC for Premium, MP3 320/128 for others) without delay.
+        // It resolves immediately (FLAC for Premium/Lossless, MP3 320/128 for others) without delay.
         if (deezerEnabled && com.music.spotui.data.preferences.isDeezerEnabled(appContext) &&
             com.music.spotui.deezer.DeezerSource.isConfigured(appContext) &&
             failedSourcesForSong[song]?.contains("Deezer") != true
@@ -1007,6 +1022,7 @@ object SongPlayer {
                     expectedTitle = meta?.title,
                     expectedArtist = meta?.artist,
                     expectedDurationSec = expectedDurationSec,
+                    preferredStreamQuality = quality,
                 )
             }
             if (r is com.music.spotui.deezer.DeezerSource.Result.Success) {
@@ -1018,13 +1034,23 @@ object SongPlayer {
                     com.music.spotui.debug.PlaybackDebugLogger.activeQuality = r.qualityLabel
                     com.music.spotui.debug.PlaybackDebugLogger.activeClient = "Deezer CDN"
                     com.music.spotui.debug.PlaybackDebugLogger.activeResolvedVideoId = "Direct Audio"
-                    com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = if (r.qualityLabel.contains("FLAC")) "audio/flac" else "audio/mp3"
-                    com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = if (r.qualityLabel.contains("FLAC")) 1411000 else 320000
+                    com.music.spotui.debug.PlaybackDebugLogger.activeMimeType = if (r.mimeFlac || r.qualityLabel.contains("FLAC", ignoreCase = true)) "audio/flac" else "audio/mp3"
+                    com.music.spotui.debug.PlaybackDebugLogger.activeBitrate = when {
+                        r.mimeFlac || r.qualityLabel.contains("FLAC", ignoreCase = true) -> 1411000
+                        r.qualityLabel.contains("320") -> 320000
+                        else -> 128000
+                    }
                     com.music.spotui.debug.PlaybackDebugLogger.i("SongPlayer", "Resolved via Deezer (${r.qualityLabel})")
                 }
                 streamCache[song] = r.uri
                 sourceCache[song] = "Deezer"
                 qualityCache[song] = r.qualityLabel
+                com.music.spotui.player.StreamUrlCache.put(
+                    trackId = song,
+                    directUrl = r.uri,
+                    source = "Deezer",
+                    quality = r.qualityLabel,
+                )
                 return r.uri
             } else {
                 Log.d(TAG, "Deezer miss ($r), continuing to fallback for: $song")
@@ -1529,7 +1555,8 @@ object SongPlayer {
                 com.music.spotui.deezer.DeezerSource.resolveRaw(
                     context = appContext,
                     spotifyId = song.spotifyTrackId.takeIf { it.isNotBlank() },
-                    searchQuery = "${song.title} ${song.singer}".trim().takeIf { it.isNotBlank() }
+                    searchQuery = "${song.title} ${song.singer}".trim().takeIf { it.isNotBlank() },
+                    preferredStreamQuality = dlQuality,
                 )
             }
             if (raw != null) {

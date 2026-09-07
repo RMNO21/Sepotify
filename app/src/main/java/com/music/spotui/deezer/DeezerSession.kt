@@ -38,7 +38,7 @@ internal object DeezerSession {
 
     /** Highest quality the signed-in account is entitled to (9/3/1). */
     @Volatile var entitledQuality: Int = QUALITY_MP3_128
-        private set
+        internal set
     /** Whether the signed-in account is a paid (HQ/lossless) tier. */
     val isPremium: Boolean get() = entitledQuality > QUALITY_MP3_128
 
@@ -228,7 +228,7 @@ internal object DeezerSession {
                                     }
                                 }
                             }
-                            Log.w(TAG, "get_url errors: ${data.get("errors")}")
+                            Log.d(TAG, "Deezer get_url format $format not available: ${data.get("errors")}")
                         }
                         val media = data.optJSONArray("media")
                         if (media != null && media.length() > 0) {
@@ -239,7 +239,7 @@ internal object DeezerSession {
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "get_url failed: $e")
+                Log.d(TAG, "get_url failed for format $format: $e")
             }
             return null to true
         }
@@ -278,7 +278,7 @@ internal object DeezerSession {
                     ?: options.optString("mobile_streaming_token")?.takeIf { it.isNotBlank() }
                     ?: results.optString("license_token")?.takeIf { it.isNotBlank() }
                 
-                entitledQuality = qufrom(options)
+                entitledQuality = qufrom(options, user)
                 if (token != null && sid != null) {
                     authorized = true
                     Log.d(TAG, "Deezer authorized successfully. Tier quality=$entitledQuality, hasLicenseToken=${licenseToken != null}")
@@ -289,9 +289,13 @@ internal object DeezerSession {
     }
 
     /** Map account OPTIONS flags → highest entitled quality id. */
-    private fun qufrom(options: JSONObject): Int = when {
-        options.optBoolean("web_lossless") || options.optBoolean("mobile_lossless") || options.optBoolean("lossless") -> QUALITY_FLAC
-        options.optBoolean("web_hq") || options.optBoolean("mobile_hq") || options.optBoolean("hq") -> QUALITY_MP3_320
+    private fun qufrom(options: JSONObject, user: JSONObject? = null): Int = when {
+        options.optBoolean("web_lossless") || options.optBoolean("mobile_lossless") ||
+            options.optBoolean("lossless") || options.optBoolean("can_stream_lossless") ||
+            user?.optBoolean("can_stream_lossless") == true -> QUALITY_FLAC
+        options.optBoolean("web_hq") || options.optBoolean("mobile_hq") ||
+            options.optBoolean("hq") || options.optBoolean("can_stream_hq") ||
+            user?.optBoolean("can_stream_hq") == true -> QUALITY_MP3_320
         else -> QUALITY_MP3_128
     }
 
