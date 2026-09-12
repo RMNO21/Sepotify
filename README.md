@@ -8,6 +8,20 @@
   <i>Crafted and enhanced by <a href="https://github.com/RMNO21">RMNO21</a></i>
 </p>
 
+<p align="center">
+  <a href="https://github.com/RMNO21/Sepotify/releases/latest"><img src="https://img.shields.io/github/v/release/RMNO21/Sepotify?style=for-the-badge&color=1DB954&logo=android&logoColor=white" alt="Latest Release" /></a>
+  <a href="https://github.com/RMNO21/Sepotify/stargazers"><img src="https://img.shields.io/github/stars/RMNO21/Sepotify?style=for-the-badge&color=24292e" alt="Stars" /></a>
+  <img src="https://img.shields.io/badge/Platform-Android%208.0%2B-brightgreen?style=for-the-badge&logo=android" alt="Platform" />
+  <img src="https://img.shields.io/badge/Audio-FLAC%20%7C%20Lossless-purple?style=for-the-badge" alt="HiFi Audio" />
+  <img src="https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge" alt="License" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/RMNO21/Sepotify/releases/latest">
+    <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_LATEST_APK-v2.1.1-1DB954?style=for-the-badge&labelColor=000000" height="40" alt="Download APK" />
+  </a>
+</p>
+
 ---
 
 ## ✨ Key Enhancements in Sepotify
@@ -58,6 +72,13 @@ app/build/outputs/apk/release/app-release.apk
 - 🎧 **Offline Mode**: Play all your downloaded tracks anytime, anywhere without cellular data or Wi-Fi.
 - 🎚️ **Equalizer & Crossfade**: Smooth transition between songs with adjustable duration.
 - 📁 **Local Files Import**: Import and play your local device audio files directly inside the app.
+
+---
+
+## ⭐ Support the Project
+
+If you find **Sepotify** useful, please consider giving it a **Star** ⭐!  
+Your support helps more people discover this project and motivates continuous development.
 
 ---
 
