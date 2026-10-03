@@ -40,3 +40,18 @@ fun getDeezerTier(context: Context): String =
 fun setDeezerTier(context: Context, tier: String) {
     prefs(context).edit().putString(KEY_TIER, tier).apply()
 }
+
+private const val KEY_ALLOW_FALLBACK = "allow_low_tier_fallback"
+
+/**
+ * When the user's preferred quality is HIGH or LOSSLESS, but Deezer is only a Free tier
+ * (128 kbps), should the app fall back to Deezer 128 kbps if 320k/FLAC is unavailable elsewhere,
+ * or prioritize YouTube (which delivers OPUS ~160 kbps)? Defaults to false so HIGH/LOSSLESS
+ * users are not degraded to MP3 128 unless they explicitly allow low-tier fallback.
+ */
+fun isDeezerFallbackAllowed(context: Context): Boolean =
+    prefs(context).getBoolean(KEY_ALLOW_FALLBACK, false)
+
+fun setDeezerFallbackAllowed(context: Context, allowed: Boolean) {
+    prefs(context).edit().putBoolean(KEY_ALLOW_FALLBACK, allowed).apply()
+}

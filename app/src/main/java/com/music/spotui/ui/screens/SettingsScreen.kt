@@ -118,12 +118,20 @@ fun SettingsScreen(navController: NavController) {
             QualityPicker(
                 title = "Streaming over Wi-Fi",
                 selected = wifiQ,
-            ) { wifiQ = it; setWifiQuality(context, it) }
+            ) {
+                wifiQ = it
+                setWifiQuality(context, it)
+                com.music.spotui.di.SongPlayer.onStreamingQualityChanged()
+            }
 
             QualityPicker(
                 title = "Streaming over cellular",
                 selected = cellQ,
-            ) { cellQ = it; setCellularQuality(context, it) }
+            ) {
+                cellQ = it
+                setCellularQuality(context, it)
+                com.music.spotui.di.SongPlayer.onStreamingQualityChanged()
+            }
 
             QualityPicker(
                 title = "Download quality",
@@ -186,6 +194,56 @@ fun SettingsScreen(navController: NavController) {
                     inactiveTrackColor = Color(0xFF333333),
                 ),
             )
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("Music source")
+            var primarySource by remember {
+                mutableStateOf(
+                    com.music.spotui.data.preferences.getPrimaryMusicSource(context)
+                        ?: com.music.spotui.data.preferences.MusicSource.YOUTUBE_MUSIC
+                )
+            }
+            Text(
+                "Select which engine SpotUI queries first for playback",
+                color = Color(0xFFB3B3B3),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+            )
+            com.music.spotui.data.preferences.MusicSource.values().forEach { src ->
+                val isSel = src == primarySource
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable {
+                            primarySource = src
+                            com.music.spotui.data.preferences.setPrimaryMusicSource(context, src)
+                            com.music.spotui.di.SongPlayer.onStreamingQualityChanged()
+                        }
+                        .background(if (isSel) Color(0xFF1A1A20) else Color.Transparent)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            src.label,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        Text(src.subtitle, color = Color(0xFFB3B3B3), fontSize = 12.sp)
+                    }
+                    if (isSel) {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = "Selected",
+                            tint = AppPalette,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
             Spacer(Modifier.height(12.dp))
             SectionTitle("Deezer")
             SettingsSwitchRow(

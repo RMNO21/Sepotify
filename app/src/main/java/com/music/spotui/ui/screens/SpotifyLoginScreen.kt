@@ -117,9 +117,9 @@ fun SpotifyLoginScreen(navController: NavController) {
 
     fun navigateNext() {
         SpotifyWebPlayer.refreshLogin(context)
-        val hasDeezer = !com.music.spotui.data.preferences.getDeezerArl(context).isNullOrBlank()
-        if (!hasDeezer) {
-            navController.navigate("${Routes.DeezerLogin.route}?next=home") {
+        val primarySource = com.music.spotui.data.preferences.getPrimaryMusicSource(context)
+        if (primarySource == null) {
+            navController.navigate(Routes.MusicSource.route) {
                 popUpTo(Routes.Login.route) { inclusive = true }
             }
         } else {
@@ -151,7 +151,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                     SpotifySession.setSpDc(context, clean)
                     success = true
                     withContext(Dispatchers.Main) {
-                        statusText = "Connected! Verifying Deezer session..."
+                        statusText = "Connected! Setting up music source..."
                         delay(250)
                         navigateNext()
                     }

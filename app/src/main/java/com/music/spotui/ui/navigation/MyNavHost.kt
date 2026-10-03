@@ -57,14 +57,12 @@ fun MyNavHost(
 
     val context = LocalContext.current
     val hasSpotify = SpotifySession.spDc(context).isNotBlank()
-    val hasDeezer = !com.music.spotui.data.preferences.getDeezerArl(context).isNullOrBlank()
+    val primaryMusicSource = com.music.spotui.data.preferences.getPrimaryMusicSource(context)
 
-    val startDestination = if (!hasSpotify) {
-        Routes.Login.route
-    } else if (!hasDeezer) {
-        "${Routes.DeezerLogin.route}?next=home"
-    } else {
-        Routes.Home.route
+    val startDestination = when {
+        !hasSpotify -> Routes.Login.route
+        primaryMusicSource == null -> Routes.MusicSource.route
+        else -> Routes.Home.route
     }
 
     // Restore the last session: put the track back into the mini player (paused)
@@ -98,6 +96,13 @@ fun MyNavHost(
         popEnterTransition = { fadeIn(animationSpec = tween(150)) },
         popExitTransition = { fadeOut(animationSpec = tween(150)) },
     ){
+        composable(Routes.MusicSource.route) {
+            LaunchedEffect(Unit) {
+                bottomBarState.value = false
+                bottomBarPlayerState.value = false
+            }
+            com.music.spotui.ui.screens.MusicSourceScreen(navHostController)
+        }
         composable(Routes.Login.route){
             LaunchedEffect(Unit) {
                 bottomBarState.value = false

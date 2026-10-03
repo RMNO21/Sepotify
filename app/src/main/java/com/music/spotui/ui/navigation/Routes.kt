@@ -29,6 +29,7 @@ sealed class Routes(
     object LocalFiles : Routes(0, "LocalFiles", "localfiles")
     object SpotiflacVerify : Routes(0, "SpotiflacVerify", "spotiflacverify")
     object StorageManagement : Routes(0, "StorageManagement", "storage_management")
+    object MusicSource : Routes(0, "MusicSource", "musicsource")
 }
 
 /** Builds a Browse-category route carrying the search genre and a display title. */

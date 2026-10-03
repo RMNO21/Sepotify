@@ -52,6 +52,15 @@ object LosslessSource {
             ids["qobuz"]?.let { qid ->
                 qobuzFlac(qid, preferHiRes)?.let { return@withContext Result.Success(it) }
             }
+            // 4. SpotiFLAC multi-provider resolver from :spotify module (Tidal, Qobuz, Amazon proxies)
+            runCatching {
+                when (val sf = com.metrolist.spotify.SpotiFlac.resolve(spotifyId, null, preferHiRes)) {
+                    is com.metrolist.spotify.SpotiFlac.Result.Success -> {
+                        Result.Success(FlacTrack(sf.track.url, sf.track.provider, sf.track.quality))
+                    }
+                    else -> null
+                }
+            }.getOrNull()?.let { return@withContext it }
             Result.NotFound
         }
 
@@ -188,8 +197,8 @@ object LosslessSource {
     private fun get(urlString: String, headers: Map<String, String>): String {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 3_500
-            readTimeout = 3_500
+            connectTimeout = 10_000
+            readTimeout = 10_000
             setRequestProperty("User-Agent", USER_AGENT)
             setRequestProperty("Accept", "application/json, text/plain, */*")
             headers.forEach { (k, v) -> setRequestProperty(k, v) }

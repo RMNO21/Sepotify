@@ -229,6 +229,10 @@ internal object DeezerSession {
                                 }
                             }
                             Log.d(TAG, "Deezer get_url format $format not available: ${data.get("errors")}")
+                            com.music.spotui.debug.PlaybackDebugLogger.d(
+                                "DeezerSession",
+                                "Format $format not available: ${data.opt("errors")}"
+                            )
                         }
                         val media = data.optJSONArray("media")
                         if (media != null && media.length() > 0) {
