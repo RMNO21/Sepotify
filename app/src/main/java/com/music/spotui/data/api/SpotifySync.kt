@@ -459,9 +459,16 @@ object SpotifySync {
                     res.isSuccess
                 }
                 "PLAYLIST_SAVE" -> {
-                    val uri = if (mut.payload.startsWith("spotify:")) mut.payload else "spotify:playlist:${mut.targetId}"
-                    val res = if (mut.flag) Spotify.addToLibrary(listOf(uri)) else Spotify.removeFromLibrary(listOf(uri))
-                    res.isSuccess
+                    val cleanId = extractSpotifyId(mut.targetId)
+                    val res = if (mut.flag) Spotify.followPlaylist(cleanId) else Spotify.unfollowPlaylist(cleanId)
+                    val success = if (res.isSuccess) true else {
+                        val uri = if (mut.payload.startsWith("spotify:")) mut.payload else "spotify:playlist:$cleanId"
+                        (if (mut.flag) Spotify.addToLibrary(listOf(uri)) else Spotify.removeFromLibrary(listOf(uri))).isSuccess
+                    }
+                    if (success) {
+                        Api.HomeCache.clear()
+                    }
+                    success
                 }
                 "ARTIST_FOLLOW" -> {
                     val uri = if (mut.payload.startsWith("spotify:")) mut.payload else "spotify:artist:${mut.targetId}"

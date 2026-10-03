@@ -90,6 +90,7 @@ fun saveLikedPlaylist(context: Context, playlist: SavedPlaylistModel) {
     }
     val sp = context.getSharedPreferences(PREF_PLAYLISTS, Context.MODE_PRIVATE)
     sp.edit().putString(KEY_SAVED_PLAYLISTS, arr.toString()).apply()
+    com.music.spotui.data.api.Api.HomeCache.library = null
 }
 
 /** Removes a playlist from saved playlists in the library. */
@@ -102,6 +103,7 @@ fun removeLikedPlaylist(context: Context, playlistId: String) {
     }
     val sp = context.getSharedPreferences(PREF_PLAYLISTS, Context.MODE_PRIVATE)
     sp.edit().putString(KEY_SAVED_PLAYLISTS, arr.toString()).apply()
+    com.music.spotui.data.api.Api.HomeCache.library = null
 }
 
 /** Checks whether a playlist is saved/liked in library. */

@@ -318,7 +318,7 @@ class Api @Inject constructor(
             emit(Response.Success(SearchResults(songs = downloadedMatches)))
             return@flow
         }
-        Spotify.search(query, types = listOf("track", "album", "artist"), limit = 20).fold(
+        Spotify.search(query, types = listOf("track", "album", "artist", "playlist"), limit = 20).fold(
             onSuccess = { res ->
                 val podcasts = runCatching { Spotify.searchPodcasts(query, limit = 12).getOrNull() }.getOrNull()
                 val apiSongs = res.tracks?.items.orEmpty().map { it.toSongModel() }
@@ -327,6 +327,15 @@ class Api @Inject constructor(
                     songs = mergedSongs,
                     albums = res.albums?.items.orEmpty().map { it.toAlbumModel() },
                     artists = res.artists?.items.orEmpty().map { it.toArtistModel() },
+                    playlists = res.playlists?.items.orEmpty().map { p ->
+                        LibraryEntry(
+                            spotifyId = p.id,
+                            name = p.name,
+                            subtitle = "Playlist" + (p.owner?.displayName?.let { " • $it" } ?: ""),
+                            coverUri = p.images.firstOrNull()?.url ?: "",
+                            isPlaylist = true,
+                        )
+                    },
                     shows = podcasts?.shows?.items.orEmpty().map { p ->
                         PodcastModel(
                             id = p.id,
@@ -742,10 +751,20 @@ class Api @Inject constructor(
      * "Your Library" with complete offline persistence and downloaded playlist indicators.
      */
     suspend fun getLibrary(): Flow<Response<List<LibraryEntry>>> = flow {
+        val localSavedPlaylistsEarly = com.music.spotui.data.preferences.getSavedPlaylists(context).map { p ->
+            LibraryEntry(
+                spotifyId = p.id,
+                name = p.name,
+                subtitle = p.subtitle,
+                coverUri = p.coverUri,
+                isPlaylist = true,
+            )
+        }
         val cached = HomeCache.library ?: OfflineCache.getLibrary(context)
         if (cached != null) {
-            HomeCache.library = cached
-            emit(Response.Success(cached))
+            val fastMerged = (localSavedPlaylistsEarly + cached).distinctBy { if (it.isPlaylist) "p:${it.spotifyId}" else "a:${it.name.lowercase()}" }
+            HomeCache.library = fastMerged
+            emit(Response.Success(fastMerged))
         } else {
             emit(Response.Loading())
         }

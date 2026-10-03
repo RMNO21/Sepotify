@@ -20,10 +20,12 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -35,6 +37,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -983,10 +986,10 @@ object Spotify {
             )
         }
 
-    // ── Playlist Mutations (GQL) ──────────────────────────────────────
+    // ── Playlist Mutations (REST + GQL Fallback) ──────────────────────
 
     /**
-     * Adds tracks to a Spotify playlist via GQL mutation.
+     * Adds tracks to a Spotify playlist via standard REST API with GQL fallback.
      * @param playlistId Playlist ID (without the `spotify:playlist:` prefix).
      * @param trackUris Full Spotify URIs, e.g. `["spotify:track:abc123"]`.
      */
@@ -995,8 +998,33 @@ object Spotify {
         trackUris: List<String>,
     ): Result<Unit> =
         runCatching {
+            val cleanId = playlistId.removePrefix("spotify:playlist:")
+            val token = accessToken
+            if (token != null) {
+                try {
+                    val body = buildJsonObject {
+                        putJsonArray("uris") {
+                            trackUris.forEach { add(it) }
+                        }
+                    }
+                    val response = restClient.post("playlists/$cleanId/tracks") {
+                        header("Authorization", "Bearer $token")
+                        setBody(TextContent(body.toString(), ContentType.Application.Json))
+                    }
+                    if (response.status.value in 200..299) {
+                        log("D", "addTracksToPlaylist: successfully added ${trackUris.size} tracks to $cleanId via REST")
+                        return@runCatching
+                    } else {
+                        log("W", "addTracksToPlaylist REST status ${response.status.value}, falling back to GQL")
+                    }
+                } catch (e: Exception) {
+                    log("W", "addTracksToPlaylist REST exception: ${e.message}, falling back to GQL")
+                }
+            }
+
+            // Fallback to GQL
             val vars = buildJsonObject {
-                put("playlistUri", "spotify:playlist:$playlistId")
+                put("playlistUri", "spotify:playlist:$cleanId")
                 putJsonArray("playlistItemUris") {
                     trackUris.forEach { add(it) }
                 }
@@ -1005,14 +1033,52 @@ object Spotify {
                     put("fromUid", JsonNull)
                 }
             }
-            log("D", "addTracksToPlaylist: sending mutation for $playlistId with ${trackUris.size} tracks, vars=$vars")
+            log("D", "addTracksToPlaylist: sending GQL mutation for $cleanId with ${trackUris.size} tracks")
             kotlinx.coroutines.withTimeout(20_000L) {
                 graphqlPost(
                     operationName = "addToPlaylist",
                     variables = vars,
                 )
             }
-            log("D", "addTracksToPlaylist: added ${trackUris.size} tracks to $playlistId")
+            log("D", "addTracksToPlaylist: added ${trackUris.size} tracks to $cleanId via GQL")
+        }
+
+    /**
+     * Follows (saves) a Spotify playlist to the user's library via standard REST API.
+     */
+    suspend fun followPlaylist(playlistId: String): Result<Unit> =
+        runCatching {
+            val token = accessToken ?: throw SpotifyException(401, "Not authenticated")
+            val cleanId = playlistId.removePrefix("spotify:playlist:")
+            val body = buildJsonObject { put("public", JsonPrimitive(false)) }
+            val response = restClient.put("playlists/$cleanId/followers") {
+                header("Authorization", "Bearer $token")
+                setBody(TextContent(body.toString(), ContentType.Application.Json))
+            }
+            if (response.status.value !in 200..299) {
+                log("W", "followPlaylist REST status ${response.status.value}, falling back to GQL")
+                addToLibrary(listOf("spotify:playlist:$cleanId")).getOrThrow()
+            } else {
+                log("D", "followPlaylist: successfully followed $cleanId via REST")
+            }
+        }
+
+    /**
+     * Unfollows (removes) a Spotify playlist from the user's library via standard REST API.
+     */
+    suspend fun unfollowPlaylist(playlistId: String): Result<Unit> =
+        runCatching {
+            val token = accessToken ?: throw SpotifyException(401, "Not authenticated")
+            val cleanId = playlistId.removePrefix("spotify:playlist:")
+            val response = restClient.delete("playlists/$cleanId/followers") {
+                header("Authorization", "Bearer $token")
+            }
+            if (response.status.value !in 200..299) {
+                log("W", "unfollowPlaylist REST status ${response.status.value}, falling back to GQL")
+                removeFromLibrary(listOf("spotify:playlist:$cleanId")).getOrThrow()
+            } else {
+                log("D", "unfollowPlaylist: successfully unfollowed $cleanId via REST")
+            }
         }
 
     /**

@@ -26,13 +26,14 @@ object OfflineStorageManager {
     const val DEFAULT_QUOTA_BYTES: Long = 10L * 1024L * 1024L * 1024L
 
     fun getDownloadsDir(context: Context): File {
-        val external = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
-        val dir = if (external != null) {
-            File(external, "Sepotify")
+        val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+        val canUsePublic = publicDir != null && (publicDir.exists() || publicDir.mkdirs() || publicDir.canWrite())
+        val dir = if (canUsePublic) {
+            File(publicDir, "Sepotify")
         } else {
-            val publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-            if (publicDir != null && publicDir.exists()) {
-                File(publicDir, "Sepotify")
+            val external = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+            if (external != null) {
+                File(external, "Sepotify")
             } else {
                 File(context.filesDir, "downloads")
             }

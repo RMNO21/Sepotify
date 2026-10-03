@@ -142,7 +142,7 @@ fun SongOptionsSheet(
             }
             SongMenuRow(
                 Icons.Default.Add, "Add to playlist",
-                enabled = song.spotifyTrackId.isNotBlank(), trailingArrow = true,
+                enabled = true, trailingArrow = true,
             ) {
                 showSavedIn = true
             }

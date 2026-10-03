@@ -64,16 +64,27 @@ object ID3Tagger {
                     conn.readTimeout = 8000
                     conn.inputStream.use { input ->
                         val raw = input.readBytes()
-                        val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size)
-                        if (bmp != null) {
-                            val baos = ByteArrayOutputStream()
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-                            imageBytes = baos.toByteArray()
+                        if (raw.size > 2_000_000) {
+                            val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size)
+                            if (bmp != null) {
+                                val baos = ByteArrayOutputStream()
+                                bmp.compress(Bitmap.CompressFormat.JPEG, 92, baos)
+                                imageBytes = baos.toByteArray()
+                            } else {
+                                imageBytes = raw
+                            }
                         } else {
+                            // Keep pristine original quality image bytes from Spotify/CDN
                             imageBytes = raw
                         }
                     }
                 }.onFailure { Log.w(TAG, "Failed to download cover art for ID3: ${it.message}") }
+            }
+
+            // Save pristine companion cover file alongside track for file managers and galleries
+            if (imageBytes != null && imageBytes!!.isNotEmpty()) {
+                val companionCover = File(file.parentFile, "${file.nameWithoutExtension}.jpg")
+                runCatching { companionCover.writeBytes(imageBytes!!) }
             }
 
             val tagBytes = buildId3v24Tag(
@@ -89,8 +100,13 @@ object ID3Tagger {
             )
             if (tagBytes.isEmpty()) return@withContext
 
-            prependId3Tag(file, tagBytes)
-            Log.d(TAG, "Successfully injected ID3v2.4 tags into ${file.name} for '$title - $artist'")
+            val ext = file.name.lowercase()
+            if (ext.contains("mp3") || ext.contains("flac")) {
+                prependId3Tag(file, tagBytes)
+                Log.d(TAG, "Successfully injected ID3v2.4 tags into ${file.name} for '$title - $artist'")
+            } else {
+                Log.d(TAG, "Format container ($ext) preserved cleanly; metadata indexed via companion art & MediaStore")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "ID3 tag injection error: ${e.message}")
         }

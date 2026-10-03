@@ -292,17 +292,24 @@ object SongPlayer {
 
     private fun triggerReconnect(context: Context) {
         val song = currentRequest
-        if (song.isBlank() || reconnectAttempt >= 3) {
-            Log.w(TAG, "Max reconnect attempts reached or empty request — auto skipping to next track")
-            scope.launch(Dispatchers.Main) { skipToNextTrack(context) }
+        if (song.isBlank()) return
+        if (reconnectAttempt >= 3) {
+            Log.w(TAG, "Max reconnect attempts reached for '$song' — stopping retry loop")
+            _playbackStatus.value = PlaybackStatus.Error("Network connection unstable. Tap to retry.", canRetry = true)
+            return
+        }
+        val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
+        if (!isOnline) {
+            Log.w(TAG, "Device is offline — pausing reconnect")
+            _playbackStatus.value = PlaybackStatus.Error("No internet connection", canRetry = true)
             return
         }
         reconnectAttempt++
         val attempt = reconnectAttempt
         val delayMs = when (attempt) {
-            1 -> 400L
-            2 -> 1200L
-            else -> 2500L
+            1 -> 600L
+            2 -> 1500L
+            else -> 3000L
         }
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
@@ -313,8 +320,7 @@ object SongPlayer {
             val pos = withContext(Dispatchers.Main) { player?.currentPosition ?: 0L }
             val newUrl = resolveStreamUrl(song, context.applicationContext, forPlayback = true)
             if (newUrl == null) {
-                _playbackStatus.value = PlaybackStatus.Error("Network connection failed", canRetry = true)
-                withContext(Dispatchers.Main) { skipToNextTrack(context) }
+                _playbackStatus.value = PlaybackStatus.Error("Network connection unstable. Tap to retry.", canRetry = true)
                 return@launch
             }
             if (currentRequest != song) return@launch
@@ -467,19 +473,11 @@ object SongPlayer {
 
                 val streamUrl = resolveStreamUrl(song, appContext, forPlayback = true) ?: run {
                     consecutiveFailures++
-                    _playbackStatus.value = PlaybackStatus.Error("Playback failed", canRetry = true)
-                    if (consecutiveFailures >= 3) {
-                        consecutiveFailures = 0
-                        withContext(Dispatchers.Main) {
-                            showShortToast(appContext, "Could not stream track. Please check connection.")
-                        }
-                        return@launch
-                    }
-                    if (currentRequest == song) withContext(Dispatchers.Main) {
-                        val msg = "No playback found for this track"
+                    val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(appContext)
+                    val msg = if (!isOnline) "No internet connection" else "Could not resolve stream for track"
+                    _playbackStatus.value = PlaybackStatus.Error(msg, canRetry = true)
+                    withContext(Dispatchers.Main) {
                         showShortToast(appContext, msg)
-                        kotlinx.coroutines.delay(400L)
-                        skipToNextTrack(appContext)
                     }
                     return@launch
                 }
@@ -505,15 +503,11 @@ object SongPlayer {
             } catch (e: Exception) {
                 Log.e(TAG, "playSong failed for query: $song", e)
                 consecutiveFailures++
-                _playbackStatus.value = PlaybackStatus.Error("Playback error", canRetry = true)
-                if (consecutiveFailures < 3) {
-                    withContext(Dispatchers.Main) {
-                        showShortToast(appContext, "No playback found for this track")
-                        kotlinx.coroutines.delay(400L)
-                        skipToNextTrack(appContext)
-                    }
-                } else {
-                    consecutiveFailures = 0
+                val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(appContext)
+                val msg = if (!isOnline) "No internet connection" else "Playback error. Tap to retry."
+                _playbackStatus.value = PlaybackStatus.Error(msg, canRetry = true)
+                withContext(Dispatchers.Main) {
+                    showShortToast(appContext, msg)
                 }
             }
         }
@@ -1706,13 +1700,13 @@ object SongPlayer {
             if (r is com.music.spotui.lossless.LosslessSource.Result.Success) {
                 val baseKey = song.spotifyTrackId.ifBlank { song.id.toString() }
                 val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, baseKey, "flac.tmp")
-                val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "flac", playlistName = playlistName, trackTitle = song.title)
-                if (httpDownloadRanged(r.track.url, tmpFile, song.url, onProgress) &&
-                    com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
-                    com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
-                    com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
-                    Log.d(TAG, "lossless downloaded (${r.track.provider} ${r.track.quality}-bit): ${song.title}")
-                    return true
+                val trackTitleClean = "${song.singer} - ${song.title}".trim(' ', '-')
+                val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "flac", playlistName = playlistName, trackTitle = trackTitleClean)
+                if (httpDownloadRanged(r.track.url, tmpFile, song.url, onProgress)) {
+                    if (finalizeDownloadedTrack(appContext, song, tmpFile, outFile, "flac", playlistId, playlistName, isAlbum)) {
+                        Log.d(TAG, "lossless downloaded (${r.track.provider} ${r.track.quality}-bit): ${song.title}")
+                        return true
+                    }
                 }
                 runCatching { tmpFile.delete() }
             }
@@ -1729,13 +1723,13 @@ object SongPlayer {
         }
         if (saavnRes is com.music.spotui.saavn.SaavnSource.Result.Success) {
             val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "m4a.tmp")
-            val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "m4a", playlistName = playlistName, trackTitle = song.title)
-            if (httpDownloadRanged(saavnRes.track.url, tmpFile, song.url, onProgress) &&
-                com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
-                com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
-                com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
-                Log.d(TAG, "Saavn downloaded (${saavnRes.track.qualityLabel}): ${song.title}")
-                return true
+            val trackTitleClean = "${song.singer} - ${song.title}".trim(' ', '-')
+            val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), "m4a", playlistName = playlistName, trackTitle = trackTitleClean)
+            if (httpDownloadRanged(saavnRes.track.url, tmpFile, song.url, onProgress)) {
+                if (finalizeDownloadedTrack(appContext, song, tmpFile, outFile, "m4a", playlistId, playlistName, isAlbum)) {
+                    Log.d(TAG, "Saavn downloaded (${saavnRes.track.qualityLabel}): ${song.title}")
+                    return true
+                }
             }
             runCatching { tmpFile.delete() }
         }
@@ -1799,7 +1793,8 @@ object SongPlayer {
         val isOpus = playback.format.mimeType.contains("opus", ignoreCase = true) || playback.format.mimeType.contains("webm", ignoreCase = true)
         val ext = if (isOpus) "opus" else "m4a"
         val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "$ext.tmp")
-        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = song.title)
+        val trackTitleClean = "${song.singer} - ${song.title}".trim(' ', '-')
+        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = trackTitleClean)
 
         if (!httpDownloadRanged(playback.streamUrl, tmpFile, song.url, onProgress)) {
             runCatching { tmpFile.delete() }
@@ -1824,24 +1819,57 @@ object SongPlayer {
             }
         }
 
+        return finalizeDownloadedTrack(appContext, song, tmpFile, outFile, ext, playlistId, playlistName, isAlbum)
+    }
+
+    private suspend fun finalizeDownloadedTrack(
+        appContext: Context,
+        song: com.music.spotui.data.entity.SongsModel,
+        tmpFile: File,
+        outFile: File,
+        ext: String,
+        playlistId: String,
+        playlistName: String,
+        isAlbum: Boolean,
+    ): Boolean {
+        // Step 1: Inject ID3v2.4 and metadata/lyrics/cover art into temp file before final atomic commit
+        runCatching {
+            com.music.spotui.storage.ID3Tagger.writeTags(
+                file = tmpFile,
+                title = song.title,
+                artist = song.singer,
+                album = song.album.ifBlank { playlistName },
+                coverArtUrl = song.coverUri
+            )
+        }
+
+        // Step 2: Atomic rename/commit into destination
         if (!com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
             lastDownloadError = "Couldn't save file"
             runCatching { tmpFile.delete() }
             com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadFailed(appContext, song, lastDownloadError!!, playlistId)
             return false
         }
+
+        // Step 3: Register in App Preferences & Room DB
         com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
         com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
 
-        // Export to system MediaStore if requested
-        if (com.music.spotui.data.preferences.isPublicStorageExportEnabled(appContext)) {
+        // Step 4: Export & register in system MediaStore so user can see it in file managers / other players
+        val mimeType = when (ext.lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "flac" -> "audio/flac"
+            "opus", "ogg" -> "audio/ogg"
+            else -> "audio/mp4"
+        }
+        runCatching {
             com.music.spotui.storage.MediaStoreExporter.exportTrackToMediaStore(
                 context = appContext,
                 sourceFile = outFile,
                 title = song.title,
                 artist = song.singer,
-                album = song.album,
-                mimeType = if (isOpus) "audio/ogg" else "audio/mp4",
+                album = song.album.ifBlank { playlistName },
+                mimeType = mimeType,
                 playlistName = playlistName
             )
         }
@@ -1859,22 +1887,18 @@ object SongPlayer {
     ): Boolean {
         val ext = if (raw.isFlac) "flac" else "mp3"
         val tmpFile = com.music.spotui.data.storage.OfflineStorageManager.createTempFile(appContext, song.id.toString(), "$ext.tmp")
-        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = song.title)
+        val trackTitleClean = "${song.singer} - ${song.title}".trim(' ', '-')
+        val outFile = com.music.spotui.data.storage.OfflineStorageManager.getFinalFile(appContext, song.id.toString(), ext, playlistName = playlistName, trackTitle = trackTitleClean)
         if (!deezerDownloadDecrypted(raw.url, raw.encrypted, raw.trackId, tmpFile, song.url, onProgress)) {
             runCatching { tmpFile.delete() }
             com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadFailed(appContext, song, "Deezer decryption error", playlistId)
             return false
         }
-        if (!com.music.spotui.data.storage.OfflineStorageManager.commitAtomicFile(tmpFile, outFile, minBytes = 4096L)) {
-            lastDownloadError = "Couldn't save file"
-            runCatching { tmpFile.delete() }
-            com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadFailed(appContext, song, lastDownloadError!!, playlistId)
-            return false
+        val ok = finalizeDownloadedTrack(appContext, song, tmpFile, outFile, ext, playlistId, playlistName, isAlbum)
+        if (ok) {
+            Log.d(TAG, "Deezer downloaded (${raw.qualityLabel}): ${song.title}")
         }
-        com.music.spotui.data.preferences.addDownload(appContext, song, outFile.absolutePath, playlistId, playlistName, isAlbum)
-        com.music.spotui.data.storage.DownloadSyncManager.onTrackDownloadCompleted(appContext, song, outFile, playlistId, playlistName)
-        Log.d(TAG, "Deezer downloaded (${raw.qualityLabel}): ${song.title}")
-        return true
+        return ok
     }
 
     /**
@@ -2592,10 +2616,10 @@ object SongPlayer {
         }
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 15_000,
-                /* maxBufferMs = */ 50_000,
-                /* bufferForPlaybackMs = */ 500,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
+                /* minBufferMs = */ 20_000,
+                /* maxBufferMs = */ 60_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .setBackBuffer(20_000, true)
@@ -2763,9 +2787,12 @@ object SongPlayer {
                         androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
                     ) || error.cause is java.io.IOException
 
-                    val msg = if (isNetwork) "Network connection failed" else "Stream playback error"
+                    val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(context)
+                    val msg = if (!isOnline) "No internet connection" else if (isNetwork) "Network connection unstable" else "Stream playback error"
                     _playbackStatus.value = PlaybackStatus.Error(msg, canRetry = true)
-                    triggerReconnect(context)
+                    if (isOnline) {
+                        triggerReconnect(context)
+                    }
                 }
             })
         }
@@ -2965,29 +2992,30 @@ object SongPlayer {
                                 withContext(Dispatchers.Main) {
                                     p.play()
                                 }
-                            } else if (elapsed > 12000L) {
+                            } else if (elapsed > 25000L) {
                                 val song = currentRequest
-                                Log.w(TAG, "Stream stalled at 00:00 for over 12s on source $currentSource (state=$state, playing=$isPlaying) — failing over to next source")
+                                Log.w(TAG, "Stream stalled at 00:00 for over 25s on source $currentSource (state=$state, playing=$isPlaying)")
                                 bufferingStartMs = 0L
                                 if (song.isNotBlank()) {
-                                    invalidateResolvedStream(song)
-                                    if (currentSource.startsWith("Deezer")) {
-                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Deezer")
-                                    } else if (currentSource.startsWith("Lossless")) {
-                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Lossless")
-                                    } else if (currentSource.startsWith("Saavn")) {
-                                        failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
-                                    } else if (currentSource.startsWith("YouTube") || currentSource.startsWith("Streamed")) {
-                                        activeResolvedVideoId[song]?.let { badVid ->
-                                            if (reconnectAttempt >= 2) {
-                                                failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                    val isOnline = com.music.spotui.data.network.NetworkMonitor.isOnlineNow(ctx)
+                                    if (isOnline) {
+                                        invalidateResolvedStream(song)
+                                        if (currentSource.startsWith("Deezer")) {
+                                            failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Deezer")
+                                        } else if (currentSource.startsWith("Lossless")) {
+                                            failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Lossless")
+                                        } else if (currentSource.startsWith("Saavn")) {
+                                            failedSourcesForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add("Saavn")
+                                        } else if (currentSource.startsWith("YouTube") || currentSource.startsWith("Streamed")) {
+                                            activeResolvedVideoId[song]?.let { badVid ->
+                                                if (reconnectAttempt >= 2) {
+                                                    failedVideoIdsForSong.getOrPut(song) { java.util.concurrent.ConcurrentHashMap.newKeySet() }.add(badVid)
+                                                }
                                             }
                                         }
-                                    }
-                                    triggerReconnect(ctx)
-                                } else {
-                                    withContext(Dispatchers.Main) {
-                                        skipToNextTrack(ctx)
+                                        triggerReconnect(ctx)
+                                    } else {
+                                        _playbackStatus.value = PlaybackStatus.Error("No internet connection", canRetry = true)
                                     }
                                 }
                             }

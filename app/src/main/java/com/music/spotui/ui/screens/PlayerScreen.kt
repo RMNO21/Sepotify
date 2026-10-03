@@ -271,8 +271,8 @@ fun PlayerScreen(navController: NavController) {
 
     val songsResponse by playerViewModel.songs.collectAsState()
     val isOnline by playerViewModel.isOnline.collectAsState()
-    val shuffle = playerViewModel.shuffleState.value
-    val repeat = playerViewModel.repeatState.value
+    val shuffle by playerViewModel.shuffleFlow.collectAsState()
+    val repeat by playerViewModel.repeatFlow.collectAsState()
 
 
     val songs = if (songsResponse is Response.Success){
@@ -1149,29 +1149,30 @@ fun PlayerFull(
             .fillMaxWidth()
             .padding(20.dp)
     ) {
-        Icon(
-            modifier = Modifier
-                .size(25.dp)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {
-                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    if (shuffle) {
-                        playerViewModel.updateShuffleState(false)
-                    } else {
-                        playerViewModel.updateShuffleState(true)
-                    }
-                }
-            ,
-            tint = if (shuffle){
-                Color(AppPalette.toArgb())
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                playerViewModel.updateShuffleState(!shuffle)
             }
-            else{
-                Color.White
-            },
-            painter = painterResource(id = R.drawable.ic_player_shuffle),
-            contentDescription = "")
+        ) {
+            Icon(
+                modifier = Modifier.size(24.dp),
+                tint = if (shuffle) Color(AppPalette.toArgb()) else Color.White,
+                painter = painterResource(id = R.drawable.ic_player_shuffle),
+                contentDescription = if (shuffle) "Shuffle enabled" else "Shuffle disabled"
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Box(
+                modifier = Modifier
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(if (shuffle) Color(AppPalette.toArgb()) else Color.Transparent)
+            )
+        }
         Icon(
             modifier = Modifier
                 .size(35.dp)

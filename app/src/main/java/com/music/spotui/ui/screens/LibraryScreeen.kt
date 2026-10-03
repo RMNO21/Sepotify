@@ -141,6 +141,28 @@ fun LibraryScreen(navController: NavController) {
     var searchQuery by remember { mutableStateOf("") }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
 
+    // Auto-refresh library on sync completion
+    val syncState by com.music.spotui.data.api.SpotifySync.syncState.collectAsState()
+    LaunchedEffect(syncState) {
+        if (syncState is com.music.spotui.data.api.SyncState.Idle || syncState is com.music.spotui.data.api.SyncState.Success) {
+            libraryViewModel.load()
+        }
+    }
+
+    // Auto-refresh library when returning to this screen
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                libraryViewModel.load()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     var menuSong by remember { mutableStateOf<SongsModel?>(null) }
     menuSong?.let { sel ->
         SongOptionsSheet(

@@ -7,6 +7,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import com.music.spotui.ui.navigation.playlistRoute
+import com.music.spotui.ui.components.SongOptionsSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -370,7 +374,7 @@ fun SumUpSearchScreen(
         } else {
             items(mixed.size) { i ->
                 when (val row = mixed[i]) {
-                    is SearchRow.Song -> SearchSongRow(row.song, searchedList, searchViewModel, onPlayed = {
+                    is SearchRow.Song -> SearchSongRow(row.song, searchedList, searchViewModel, navController = navController, onPlayed = {
                         searchViewModel.saveSearchQuery(row.song.title)
                         recordRecent(row.song.toRecentItem())
                     })
@@ -395,6 +399,17 @@ fun SumUpSearchScreen(
                         ))
                         navController.navigate(albumRoute(row.album.name, row.album.artists))
                     }
+                    is SearchRow.Playlist -> SearchPlaylistRow(row.playlist) {
+                        searchViewModel.saveSearchQuery(row.playlist.name)
+                        recordRecent(com.music.spotui.data.preferences.RecentItem(
+                            type = "playlist",
+                            key = row.playlist.spotifyId,
+                            name = row.playlist.name,
+                            singer = row.playlist.subtitle,
+                            image = row.playlist.coverUri,
+                        ))
+                        navController.navigate(playlistRoute(row.playlist.spotifyId, row.playlist.name))
+                    }
                 }
             }
             // ── Podcasts: shows (→ detail) then individual episodes (→ play) ──
@@ -418,7 +433,7 @@ fun SumUpSearchScreen(
                 item { SearchSectionHeader("Episodes") }
                 items(results.episodes.size) { i ->
                     val ep = results.episodes[i]
-                    SearchSongRow(ep, results.episodes, searchViewModel, onPlayed = {
+                    SearchSongRow(ep, results.episodes, searchViewModel, navController = navController, onPlayed = {
                         recordRecent(ep.toRecentItem())
                     })
                 }
@@ -428,27 +443,30 @@ fun SumUpSearchScreen(
     }
 }
 
-/** A single row in the search results: a track, an artist, or an album. */
+/** A single row in the search results: a track, an artist, an album, or a playlist. */
 sealed class SearchRow {
     data class Song(val song: SongsModel) : SearchRow()
     data class Artist(val artist: com.music.spotui.data.entity.ArtistsModel) : SearchRow()
     data class Album(val album: com.music.spotui.data.entity.AlbumsModel) : SearchRow()
+    data class Playlist(val playlist: com.music.spotui.data.entity.LibraryEntry) : SearchRow()
 }
 
 /**
- * Interleaves the three result types into one list, weighted toward songs
- * (2 songs per artist+album cycle) so the list reads as mixed rather than
+ * Interleaves the four result types into one list, weighted toward songs
+ * (2 songs per artist+album+playlist cycle) so the list reads as mixed rather than
  * grouped, while songs — the most common search intent — stay prominent.
  */
 private fun mixSearchResults(results: SearchResults): List<SearchRow> {
     val songs = results.songs.iterator()
     val artists = results.artists.iterator()
     val albums = results.albums.iterator()
+    val playlists = results.playlists.iterator()
     val out = ArrayList<SearchRow>()
-    while (songs.hasNext() || artists.hasNext() || albums.hasNext()) {
+    while (songs.hasNext() || artists.hasNext() || albums.hasNext() || playlists.hasNext()) {
         repeat(2) { if (songs.hasNext()) out += SearchRow.Song(songs.next()) }
         if (artists.hasNext()) out += SearchRow.Artist(artists.next())
         if (albums.hasNext()) out += SearchRow.Album(albums.next())
+        if (playlists.hasNext()) out += SearchRow.Playlist(playlists.next())
     }
     return out
 }
@@ -590,13 +608,13 @@ fun RecentItemRow(
     }
 }
 
-@RequiresApi(Build.VERSION_CODES.S)
-@OptIn(ExperimentalGlideComposeApi::class)
+@OptIn(ExperimentalGlideComposeApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun SearchSongRow(
     song: SongsModel,
     songList: List<SongsModel>,
     searchViewModel: SearchViewModel,
+    navController: NavController,
     onPlayed: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -605,6 +623,16 @@ fun SearchSongRow(
     LaunchedEffect(likeState) { isLiked = isSongLiked(context, song.id.toString()) }
     val currentPlayingIndicatorColor =
         if (song.id == searchViewModel.currentSongId.value) Color(AppPalette.toArgb()) else Color.White
+    var showOptions by remember { mutableStateOf(false) }
+
+    if (showOptions) {
+        SongOptionsSheet(
+            song = song,
+            navController = navController,
+            context = context,
+            onDismiss = { showOptions = false },
+        )
+    }
 
     Row(
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -612,30 +640,32 @@ fun SearchSongRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp, 8.dp)
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-            ) {
-                onPlayed()
-                // Start a radio from the tapped track (queue = this song + Spotify
-                // recommendations) rather than queuing the whole search list.
-                searchViewModel.startRadioFromSong(song)
-                SongPlayer.playSong(song.url, context)
-                searchViewModel.updateSongState(
-                    song.coverUri,
-                    song.title,
-                    song.singer,
-                    true,
-                    song.id,
-                    0,
-                    song.album,
-                )
-            },
+                onClick = {
+                    onPlayed()
+                    searchViewModel.startRadioFromSong(song)
+                    SongPlayer.playSong(song.url, context)
+                    searchViewModel.updateSongState(
+                        song.coverUri,
+                        song.title,
+                        song.singer,
+                        true,
+                        song.id,
+                        0,
+                        song.album,
+                    )
+                },
+                onLongClick = {
+                    showOptions = true
+                }
+            ),
     ) {
         Row(
             horizontalArrangement = Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.width(280.dp),
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
         ) {
             GlideImage(
                 modifier = Modifier
@@ -649,27 +679,72 @@ fun SearchSongRow(
                 contentDescription = "",
             )
             Column {
-                Text(text = song.title, color = currentPlayingIndicatorColor, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                Text(text = "Song • ${song.singer}", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                Text(text = song.title, color = currentPlayingIndicatorColor, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = "Song • ${song.singer}", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
-        Icon(
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {
+                        if (isLiked) removeLikedSongId(context, song.id.toString())
+                        else addLikedSongId(context, song.id.toString())
+                        isLiked = isSongLiked(context, song.id.toString())
+                        searchViewModel.updateLikeState(!searchViewModel.likeState.value)
+                    },
+                painter = if (isLiked) painterResource(id = R.drawable.added) else painterResource(id = R.drawable.ic_add),
+                tint = if (isLiked) Color.White else Color.Gray,
+                contentDescription = "Like",
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "Options",
+                tint = Color.Gray,
+                modifier = Modifier
+                    .size(22.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { showOptions = true },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalGlideComposeApi::class)
+@Composable
+fun SearchPlaylistRow(playlist: com.music.spotui.data.entity.LibraryEntry, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp, 8.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onClick() },
+    ) {
+        GlideImage(
             modifier = Modifier
-                .size(20.dp)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) {
-                    if (isLiked) removeLikedSongId(context, song.id.toString())
-                    else addLikedSongId(context, song.id.toString())
-                    isLiked = isSongLiked(context, song.id.toString())
-                    searchViewModel.updateLikeState(!searchViewModel.likeState.value)
-                },
-            painter = if (isLiked) painterResource(id = R.drawable.added) else painterResource(id = R.drawable.ic_add),
-            tint = if (isLiked) Color.White else Color.Gray,
+                .padding(0.dp, 0.dp, 10.dp, 0.dp)
+                .size(48.dp)
+                .clip(RoundedCornerShape(6.dp)),
+            model = playlist.coverUri,
+            contentScale = ContentScale.Crop,
+            failure = placeholder(R.drawable.placeholder),
+            loading = placeholder(R.drawable.placeholder),
             contentDescription = "",
         )
+        Column {
+            Text(text = playlist.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(text = playlist.subtitle.ifBlank { "Playlist" }, color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
