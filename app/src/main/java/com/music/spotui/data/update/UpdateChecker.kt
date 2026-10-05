@@ -17,7 +17,7 @@ object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
     private const val RELEASE_API =
-        "https://api.github.com/repos/Spotui/Spotui/releases/tags/Release"
+        "https://api.github.com/repos/RMNO21/Sepotify/releases/latest"
     private const val PREFS = "update_prefs"
     private const val KEY_SKIP = "skip_fingerprint"
 
@@ -71,7 +71,7 @@ object UpdateChecker {
                 .firstOrNull { it.optString("name").endsWith(".apk") }
                 ?.optString("browser_download_url")
             val page = json.optString("html_url")
-                .ifBlank { "https://github.com/Spotui/Spotui/releases/tag/Release" }
+                .ifBlank { "https://github.com/RMNO21/Sepotify/releases/latest" }
             return UpdateInfo(
                 version = version,
                 downloadUrl = apkUrl?.ifBlank { null } ?: page,

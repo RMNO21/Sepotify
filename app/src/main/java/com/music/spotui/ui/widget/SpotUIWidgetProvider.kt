@@ -201,10 +201,14 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         )
                         views.setOnClickPendingIntent(R.id.widget_root, mainPending)
 
+                        val pkg = context.packageName
                         views.setOnClickPendingIntent(
                             R.id.widget_play_pause,
                             PendingIntent.getBroadcast(
-                                context, 1, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_PLAY_PAUSE },
+                                context, 1, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_PLAY_PAUSE"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )
@@ -212,7 +216,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         views.setOnClickPendingIntent(
                             R.id.widget_next,
                             PendingIntent.getBroadcast(
-                                context, 2, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_NEXT },
+                                context, 2, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_NEXT"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )
@@ -220,7 +227,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         views.setOnClickPendingIntent(
                             R.id.widget_prev,
                             PendingIntent.getBroadcast(
-                                context, 3, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_PREV },
+                                context, 3, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_PREV"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )
@@ -228,7 +238,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         views.setOnClickPendingIntent(
                             R.id.widget_like,
                             PendingIntent.getBroadcast(
-                                context, 4, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_LIKE },
+                                context, 4, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_LIKE"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )
@@ -236,7 +249,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         views.setOnClickPendingIntent(
                             R.id.widget_shuffle,
                             PendingIntent.getBroadcast(
-                                context, 5, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_SHUFFLE },
+                                context, 5, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_SHUFFLE"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )
@@ -244,7 +260,10 @@ class SpotUIWidgetProvider : AppWidgetProvider() {
                         views.setOnClickPendingIntent(
                             R.id.widget_repeat,
                             PendingIntent.getBroadcast(
-                                context, 6, Intent(context, SpotUIWidgetProvider::class.java).apply { action = ACTION_REPEAT },
+                                context, 6, Intent(context, SpotUIWidgetProvider::class.java).apply {
+                                    action = "$pkg.WIDGET_REPEAT"
+                                    setPackage(pkg)
+                                },
                                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                             )
                         )

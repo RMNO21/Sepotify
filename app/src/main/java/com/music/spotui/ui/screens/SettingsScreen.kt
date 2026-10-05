@@ -615,7 +615,7 @@ fun SettingsScreen(navController: NavController) {
                     .padding(14.dp)
             ) {
                 Text(
-                    text = "Sepotify v2.0",
+                    text = "Sepotify v${com.music.spotui.BuildConfig.VERSION_NAME}",
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold

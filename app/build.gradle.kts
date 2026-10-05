@@ -15,8 +15,8 @@ android {
         applicationId = "com.aistudio.sepotifymusic.vwnxyz"
         minSdk = 24
         targetSdk = 34
-        versionCode = 104
-        versionName = "2.1.1"
+        versionCode = 106
+        versionName = "2.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

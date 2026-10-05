@@ -36,7 +36,7 @@ object AppUpdateInstaller {
 
         try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val fileName = "spotui-update-${info.version}.apk"
+            val fileName = "sepotify-update-${info.version}.apk"
             val targetFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
             if (targetFile.exists()) {
                 targetFile.delete()
@@ -91,6 +91,18 @@ object AppUpdateInstaller {
     fun installApk(context: Context, file: File) {
         if (!file.exists()) return
         try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                val allowIntent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(allowIntent)
+                Toast.makeText(context, "Please allow permission to install updates, then return to update.", Toast.LENGTH_LONG).show()
+                return
+            }
+
             val contentUri: Uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -98,7 +110,8 @@ object AppUpdateInstaller {
             )
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(contentUri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(installIntent)
         } catch (e: Exception) {
