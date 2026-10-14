@@ -294,7 +294,7 @@ fun SumUpSearchScreen(
 
                 // Display Room database recent queries
                 if (hasRecentQueries) {
-                    items(recentQueries.size) { i ->
+                    items(recentQueries.size, key = { i -> recentQueries[i].query }) { i ->
                         val item = recentQueries[i]
                         RecentSearchQueryRow(
                             query = item.query,
@@ -317,7 +317,7 @@ fun SumUpSearchScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }
-                    items(recents.size) { i ->
+                    items(recents.size, key = { i -> "${recents[i].type}_${recents[i].key}" }) { i ->
                         val item = recents[i]
                         RecentItemRow(
                             item = item,
@@ -372,7 +372,7 @@ fun SumUpSearchScreen(
         } else if (isLoading) {
             item { SearchShimmerLoading() }
         } else {
-            items(mixed.size) { i ->
+            items(mixed.size, key = { i -> val r = mixed[i]; when(r) { is SearchRow.Song -> "song_${r.song.id}"; is SearchRow.Artist -> "artist_${r.artist.id}"; is SearchRow.Album -> "album_${r.album.name}_${r.album.artists}"; is SearchRow.Playlist -> "playlist_${r.playlist.spotifyId}" } }) { i ->
                 when (val row = mixed[i]) {
                     is SearchRow.Song -> SearchSongRow(row.song, searchedList, searchViewModel, navController = navController, onPlayed = {
                         searchViewModel.saveSearchQuery(row.song.title)
@@ -415,7 +415,7 @@ fun SumUpSearchScreen(
             // ── Podcasts: shows (→ detail) then individual episodes (→ play) ──
             if (results.shows.isNotEmpty()) {
                 item { SearchSectionHeader("Podcasts") }
-                items(results.shows.size) { i ->
+                items(results.shows.size, key = { i -> results.shows[i].id }) { i ->
                     val show = results.shows[i]
                     SearchShowRow(show) {
                         recordRecent(com.music.spotui.data.preferences.RecentItem(
@@ -431,7 +431,7 @@ fun SumUpSearchScreen(
             }
             if (results.episodes.isNotEmpty()) {
                 item { SearchSectionHeader("Episodes") }
-                items(results.episodes.size) { i ->
+                items(results.episodes.size, key = { i -> results.episodes[i].id }) { i ->
                     val ep = results.episodes[i]
                     SearchSongRow(ep, results.episodes, searchViewModel, navController = navController, onPlayed = {
                         recordRecent(ep.toRecentItem())

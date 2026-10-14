@@ -160,7 +160,7 @@ fun HomeFeedContent(navController: NavController, feed: HomeFeedModel) {
                 HomeShortcutGrid(navController, section.items.take(8))
             }
         }
-        items(carousels.size) { i ->
+        items(carousels.size, key = { i -> carousels[i].title }) { i ->
             HomeFeedSection(navController, carousels[i])
         }
     }
@@ -223,7 +223,7 @@ private fun HomeHeaderRow(navController: NavController) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.weight(1f),
         ) {
-            items(filters.size) { i ->
+            items(filters.size, key = { i -> filters[i] }) { i ->
                 val label = filters[i]
                 val isSel = label == selected
                 Box(
@@ -337,7 +337,7 @@ private fun HomeFeedSection(navController: NavController, section: HomeSection) 
         modifier = Modifier.padding(16.dp, 20.dp, 16.dp, 4.dp),
     )
     LazyRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp, 0.dp)) {
-        items(section.items.size) { i ->
+        items(section.items.size, key = { i -> section.items[i].name }) { i ->
             HomeFeedCard(section.items[i]) { onHomeItemClick(navController, section.items[i]) }
         }
     }
@@ -561,7 +561,7 @@ fun HomeAlbums(
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold)
         LazyRow(modifier = Modifier.padding(6.dp)){
-            items(reversedAlbum.size){ album ->
+            items(reversedAlbum.size, key = { i -> reversedAlbum[i].name + "_" + reversedAlbum[i].artists }){ album ->
                 Box(modifier = Modifier
                     .padding(10.dp)
                     .width(150.dp)
@@ -614,7 +614,7 @@ fun HomeRecentlyPlayed(
         fontSize = 23.sp,
         fontWeight = FontWeight.Bold)
     LazyRow(modifier = Modifier.padding(6.dp)){
-        items(albums.size){
+        items(albums.size, key = { i -> i }){
             Box(modifier = Modifier
                 .padding(10.dp)
                 .width(130.dp)
@@ -658,7 +658,7 @@ fun HomeArtists(
         fontSize = 23.sp,
         fontWeight = FontWeight.Bold)
     LazyRow(modifier = Modifier.padding(6.dp)){
-        items(artists.size){artist ->
+        items(artists.size, key = { i -> artists[i].id }){artist ->
             Box(modifier = Modifier
                 .padding(10.dp)
                 .width(150.dp)
@@ -901,7 +901,7 @@ fun OfflineHomeScreen(navController: NavController) {
                 )
             }
 
-            items(downloadedSongs.size) { index ->
+            items(downloadedSongs.size, key = { i -> downloadedSongs[i].id }) { index ->
                 val song = downloadedSongs[index]
                 val isPlaying = song.id == playerViewModel.currentSongId.value
 
