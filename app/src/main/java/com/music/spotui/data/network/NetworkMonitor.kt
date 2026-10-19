@@ -160,13 +160,13 @@ object NetworkMonitor {
 
     fun triggerProbe(appContext: Context, immediateOnline: Boolean = false) {
         if (immediateOnline) {
-            _isOnline.value = true
+            updateOnlineState(true, appContext)
         }
         probeJob?.cancel()
         probeJob = monitorScope.launch {
             val systemConnected = checkSystemConnectivity(appContext)
             if (!systemConnected) {
-                _isOnline.value = false
+                updateOnlineState(false, appContext)
                 return@launch
             }
             val reachable = checkActualInternetAccess()
