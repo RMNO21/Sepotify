@@ -3,6 +3,7 @@ package com.music.spotui.worker
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -182,7 +183,11 @@ class DownloadWorker(
                 .addTag("track_$trackKey")
                 .build()
 
-            WorkManager.getInstance(context).enqueue(workRequest)
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "download_$trackKey",
+                ExistingWorkPolicy.KEEP,
+                workRequest
+            )
         }
     }
 }

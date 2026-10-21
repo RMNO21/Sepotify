@@ -200,16 +200,34 @@ object OfflineStorageManager {
 
         // Fallback for cross-filesystem / locked rename
         return try {
+            val fallbackTemp = File(finalFile.parent, finalFile.name + ".copy_tmp")
             FileInputStream(tempFile).use { input ->
-                FileOutputStream(finalFile).use { output ->
+                FileOutputStream(fallbackTemp).use { output ->
                     input.copyTo(output)
                 }
+            }
+            if (fallbackTemp.exists() && fallbackTemp.length() >= minBytes) {
+                if (finalFile.exists()) finalFile.delete()
+                val success = fallbackTemp.renameTo(finalFile)
+                if (!success) {
+                    // Worst case: stream directly to final if rename STILL fails on same FS
+                    FileInputStream(fallbackTemp).use { input ->
+                        FileOutputStream(finalFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    fallbackTemp.delete()
+                }
+            } else {
+                fallbackTemp.delete()
+                throw Exception("Fallback copy resulted in invalid file size")
             }
             tempFile.delete()
             finalFile.exists() && finalFile.length() >= minBytes
         } catch (e: Exception) {
             Log.e(TAG, "Fallback file copy failed", e)
             tempFile.delete()
+            File(finalFile.parent, finalFile.name + ".copy_tmp").delete()
             false
         }
     }

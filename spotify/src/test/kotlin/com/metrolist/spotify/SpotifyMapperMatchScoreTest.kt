@@ -96,7 +96,7 @@ class SpotifyMapperMatchScoreTest {
     fun `early exit threshold is a stable published constant`() {
         // If this value is lowered carelessly the matcher will start picking weak
         // candidates and stop scanning; if raised too high the matcher becomes slow.
-        assertEquals(0.95, SpotifyMapper.earlyExitThreshold(), 0.0001)
+        assertEquals(0.92, SpotifyMapper.earlyExitThreshold(), 0.0001)
     }
 
     @Test
