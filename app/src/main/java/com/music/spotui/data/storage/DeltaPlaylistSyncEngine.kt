@@ -82,7 +82,7 @@ object DeltaPlaylistSyncEngine {
 
         // 2. Compute Two-Way Set Difference
         val localTrackIds = crossRefDao.getTrackIdsForPlaylist(playlistId).toSet()
-        val remoteTrackIds = remoteTracks.map { it.id.toString() }.toSet()
+        val remoteTrackIds = remoteTracks.map { DownloadSyncManager.getTrackKey(it) }.toSet()
 
         val addedTrackIds = remoteTrackIds - localTrackIds
         val removedTrackIds = localTrackIds - remoteTrackIds
@@ -91,25 +91,21 @@ object DeltaPlaylistSyncEngine {
 
         // 3. Remove deleted tracks
         for (removedId in removedTrackIds) {
-            crossRefDao.deleteCrossRef(playlistId, removedId)
-            // If track is not in any other playlist, we can check if cleanup is needed
-            val refCount = crossRefDao.countPlaylistsReferencingTrack(removedId)
-            if (refCount == 0) {
-                Log.d(TAG, "Track $removedId no longer referenced in any playlist")
-            }
+            DownloadSyncManager.onTrackRemovedFromPlaylist(context, playlistId, removedId)
         }
 
         // 4. Batch Process added tracks with bounded concurrency (max 4 parallel workers)
         val semaphore = Semaphore(MAX_CONCURRENT_WORKERS)
-        val addedTracks = remoteTracks.filter { it.id.toString() in addedTrackIds }
+        val addedTracks = remoteTracks.filter { DownloadSyncManager.getTrackKey(it) in addedTrackIds }
 
         coroutineScope {
             val jobs = addedTracks.mapIndexed { index, song ->
                 async {
                     semaphore.withPermit {
+                        val trackKey = DownloadSyncManager.getTrackKey(song)
                         // Insert track entity if not present
                         val trackEntity = TrackEntity(
-                            trackId = song.id.toString(),
+                            trackId = trackKey,
                             songId = song.id,
                             title = song.title,
                             singer = song.singer,
@@ -124,7 +120,7 @@ object DeltaPlaylistSyncEngine {
                         crossRefDao.insertCrossRef(
                             PlaylistTrackCrossRef(
                                 playlistId = playlistId,
-                                trackId = song.id.toString(),
+                                trackId = trackKey,
                                 sortOrder = index
                             )
                         )
