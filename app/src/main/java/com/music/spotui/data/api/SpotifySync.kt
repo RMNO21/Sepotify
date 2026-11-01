@@ -417,31 +417,41 @@ object SpotifySync {
 
     private suspend fun flushPendingQueueInternal(context: Context) {
         if (!NetworkMonitor.isOnlineNow(context) || !SpotifyTokenProvider.ensureToken(context)) return
-        queueMutex.withLock {
-            val pending = loadQueue(context).toMutableList()
-            if (pending.isEmpty()) return
-            Log.d(TAG, "Flushing ${pending.size} pending mutations")
-            val remaining = mutableListOf<Mutation>()
 
-            for (mut in pending) {
-                var success = false
-                repeat(2) { attempt ->
-                    if (executeMutation(context, mut)) {
-                        success = true
-                        return@repeat
-                    }
-                    delay(300L * (attempt + 1))
+        val pending = queueMutex.withLock {
+            loadQueue(context)
+        }
+
+        if (pending.isEmpty()) return
+        Log.d(TAG, "Flushing ${pending.size} pending mutations")
+
+        for (mut in pending) {
+            var success = false
+            repeat(2) { attempt ->
+                if (executeMutation(context, mut)) {
+                    success = true
+                    return@repeat
                 }
-                if (!success) {
-                    mut.retryCount++
-                    if (mut.retryCount < 5) {
-                        remaining.add(mut)
+                delay(300L * (attempt + 1))
+            }
+
+            queueMutex.withLock {
+                val currentQueue = loadQueue(context).toMutableList()
+                val idx = currentQueue.indexOfFirst { it.type == mut.type && it.targetId == mut.targetId && it.payload == mut.payload }
+                if (idx != -1) {
+                    if (success) {
+                        currentQueue.removeAt(idx)
                     } else {
-                        Log.w(TAG, "Dropping mutation after max retries: ${mut.type} -> ${mut.targetId}")
+                        val currentMut = currentQueue[idx]
+                        currentMut.retryCount++
+                        if (currentMut.retryCount >= 5) {
+                            Log.w(TAG, "Dropping mutation after max retries: ${currentMut.type} -> ${currentMut.targetId}")
+                            currentQueue.removeAt(idx)
+                        }
                     }
+                    saveQueue(context, currentQueue)
                 }
             }
-            saveQueue(context, remaining)
         }
     }
 

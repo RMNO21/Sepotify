@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -65,49 +66,59 @@ object DownloadSyncManager {
         playlistTitle: String,
         song: SongsModel
     ) = withContext(Dispatchers.IO) {
-        val app = context.applicationContext
-        val db = AppDatabase.getInstance(app)
-        val trackDao = db.trackDao()
-        val playlistDao = db.playlistDao()
-        val ptDao = db.playlistTrackDao()
+        syncMutex.withLock {
+            val app = context.applicationContext
+            val db = AppDatabase.getInstance(app)
+            val trackDao = db.trackDao()
+            val playlistDao = db.playlistDao()
+            val ptDao = db.playlistTrackDao()
 
-        val trackKey = getTrackKey(song)
-        ptDao.insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
+            val trackKey = getTrackKey(song)
+            ptDao.insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
 
-        val playlist = playlistDao.getPlaylist(playlistId)
-        val isDownloadEnabled = playlist?.isDownloadEnabled == true
+            val playlist = playlistDao.getPlaylist(playlistId)
+            val isDownloadEnabled = playlist?.isDownloadEnabled == true
 
-        if (!isDownloadEnabled) {
-            // Track added to non-downloaded playlist, nothing more to do
-            return@withContext
+            if (!isDownloadEnabled) {
+                // Track added to non-downloaded playlist, nothing more to do
+                return@withLock
+            }
+
+            val existingTrack = trackDao.getTrack(trackKey)
+            val isFileValid = existingTrack?.localPath?.let { File(it).let { f -> f.exists() && f.length() > 0 } } == true
+
+            if (existingTrack != null && existingTrack.downloadStatus == DownloadStatus.COMPLETED && isFileValid) {
+                // Track is already stored locally: increment ref_count, NO network download triggered!
+                trackDao.incrementRefCount(trackKey)
+                Log.d(TAG, "Track '${song.title}' already cached locally. Incremented ref_count to ${existingTrack.refCount + 1}")
+            } else {
+                // Not downloaded yet: Set status to QUEUED and trigger background download worker
+                if (existingTrack != null) {
+                    trackDao.updateDownloadStatus(
+                        trackId = trackKey,
+                        status = DownloadStatus.QUEUED,
+                        localPath = existingTrack.localPath,
+                        fileSize = existingTrack.fileSize,
+                        errorMessage = null,
+                        time = System.currentTimeMillis()
+                    )
+                    trackDao.incrementRefCount(trackKey)
+                } else {
+                    trackDao.insertTrack(TrackEntity.fromSongModel(song, DownloadStatus.QUEUED, refCount = 1))
+                }
+                Log.d(TAG, "Queued track '${song.title}' for playlist '$playlistTitle' download")
+
+                // Trigger background download worker
+                DownloadWorker.enqueue(
+                    context = app,
+                    song = song,
+                    playlistId = playlistId,
+                    playlistName = playlistTitle
+                )
+            }
+
+            refreshPlaylistStateLocked(app, playlistId)
         }
-
-        val existingTrack = trackDao.getTrack(trackKey)
-        val isFileValid = existingTrack?.localPath?.let { File(it).let { f -> f.exists() && f.length() > 0 } } == true
-
-        if (existingTrack != null && existingTrack.downloadStatus == DownloadStatus.COMPLETED && isFileValid) {
-            // Track is already stored locally: increment ref_count, NO network download triggered!
-            trackDao.incrementRefCount(trackKey)
-            Log.d(TAG, "Track '${song.title}' already cached locally. Incremented ref_count to ${existingTrack.refCount + 1}")
-        } else {
-            // Not downloaded yet: Set status to QUEUED and trigger background download worker
-            val newTrack = (existingTrack ?: TrackEntity.fromSongModel(song, DownloadStatus.QUEUED, refCount = 1)).copy(
-                downloadStatus = DownloadStatus.QUEUED,
-                refCount = if (existingTrack != null) existingTrack.refCount + 1 else 1
-            )
-            trackDao.insertTrack(newTrack)
-            Log.d(TAG, "Queued track '${song.title}' for playlist '$playlistTitle' download")
-
-            // Trigger background download worker
-            DownloadWorker.enqueue(
-                context = app,
-                song = song,
-                playlistId = playlistId,
-                playlistName = playlistTitle
-            )
-        }
-
-        refreshPlaylistState(app, playlistId)
     }
 
     // ── Scenario 2: Removing a Track from a Downloaded Playlist ──
@@ -117,41 +128,44 @@ object DownloadSyncManager {
         playlistId: String,
         trackKey: String
     ) = withContext(Dispatchers.IO) {
-        val app = context.applicationContext
-        val db = AppDatabase.getInstance(app)
-        val trackDao = db.trackDao()
-        val ptDao = db.playlistTrackDao()
+        syncMutex.withLock {
+            val app = context.applicationContext
+            val db = AppDatabase.getInstance(app)
+            val trackDao = db.trackDao()
+            val ptDao = db.playlistTrackDao()
 
-        ptDao.deleteCrossRef(playlistId, trackKey)
+            ptDao.deleteCrossRef(playlistId, trackKey)
 
-        val track = trackDao.getTrack(trackKey) ?: return@withContext
-        val newRefCount = (track.refCount - 1).coerceAtLeast(0)
+            val track = trackDao.getTrack(trackKey) ?: return@withLock
+            val newRefCount = (track.refCount - 1).coerceAtLeast(0)
 
-        if (newRefCount == 0) {
-            // ref_count == 0: Mark file for deletion, purge audio file from disk, reset DB record
-            track.localPath?.let { path ->
-                val f = File(path)
-                if (f.exists()) {
-                    f.delete()
-                    Log.d(TAG, "Purged local file for '${track.title}' (ref_count reached 0)")
+            if (newRefCount == 0) {
+                // ref_count == 0: Mark file for deletion, purge audio file from disk, reset DB record
+                track.localPath?.let { path ->
+                    val f = File(path)
+                    if (f.exists()) {
+                        f.delete()
+                        Log.d(TAG, "Purged local file for '${track.title}' (ref_count reached 0)")
+                    }
                 }
+                trackDao.updateDownloadStatus(
+                    trackId = trackKey,
+                    status = DownloadStatus.NONE,
+                    localPath = null,
+                    fileSize = 0L,
+                    errorMessage = null,
+                    time = System.currentTimeMillis()
+                )
+                // Need to decrement ref_count to 0, which decrementRefCount handles by `CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END`
+                trackDao.decrementRefCount(trackKey)
+            } else {
+                // ref_count > 0: Keep local file intact because another downloaded playlist or Liked Songs references it
+                trackDao.decrementRefCount(trackKey)
+                Log.d(TAG, "Decremented ref_count for '${track.title}' to $newRefCount (file preserved)")
             }
-            trackDao.updateDownloadStatus(
-                trackId = trackKey,
-                status = DownloadStatus.NONE,
-                localPath = null,
-                fileSize = 0L,
-                errorMessage = null,
-                time = System.currentTimeMillis()
-            )
-            trackDao.updateTrack(track.copy(refCount = 0, localPath = null, downloadStatus = DownloadStatus.NONE, fileSize = 0L))
-        } else {
-            // ref_count > 0: Keep local file intact because another downloaded playlist or Liked Songs references it
-            trackDao.decrementRefCount(trackKey)
-            Log.d(TAG, "Decremented ref_count for '${track.title}' to $newRefCount (file preserved)")
-        }
 
-        refreshPlaylistState(app, playlistId)
+            refreshPlaylistStateLocked(app, playlistId)
+        }
     }
 
     // ── Scenario 3: Deleting or Toggling Off a Downloaded Playlist ──
@@ -164,87 +178,110 @@ object DownloadSyncManager {
         songs: List<SongsModel>,
         enabled: Boolean
     ) = withContext(Dispatchers.IO) {
-        val app = context.applicationContext
-        val db = AppDatabase.getInstance(app)
-        val playlistDao = db.playlistDao()
-        val trackDao = db.trackDao()
-        val ptDao = db.playlistTrackDao()
+        syncMutex.withLock {
+            val app = context.applicationContext
+            val db = AppDatabase.getInstance(app)
+            val playlistDao = db.playlistDao()
+            val trackDao = db.trackDao()
+            val ptDao = db.playlistTrackDao()
 
-        val playlist = PlaylistEntity(
-            playlistId = playlistId,
-            title = playlistTitle,
-            coverUri = coverUri,
-            isDownloadEnabled = enabled,
-            lastSyncTimestamp = System.currentTimeMillis()
-        )
-        playlistDao.insertPlaylist(playlist)
+            val playlist = PlaylistEntity(
+                playlistId = playlistId,
+                title = playlistTitle,
+                coverUri = coverUri,
+                isDownloadEnabled = enabled,
+                lastSyncTimestamp = System.currentTimeMillis()
+            )
+            playlistDao.insertPlaylist(playlist)
 
-        if (!enabled) {
-            // Toggled OFF / Deleted: Decrement ref_count for all tracks, run garbage collection
-            val trackIds = ptDao.getTrackIdsForPlaylist(playlistId)
-            for (tId in trackIds) {
-                val track = trackDao.getTrack(tId) ?: continue
-                val newCount = (track.refCount - 1).coerceAtLeast(0)
-                if (newCount == 0) {
-                    track.localPath?.let { path ->
-                        val f = File(path)
-                        if (f.exists()) f.delete()
+            if (!enabled) {
+                // Toggled OFF / Deleted: Decrement ref_count for all tracks, run garbage collection
+                val trackIds = ptDao.getTrackIdsForPlaylist(playlistId)
+                for (tId in trackIds) {
+                    val track = trackDao.getTrack(tId) ?: continue
+                    val newCount = (track.refCount - 1).coerceAtLeast(0)
+                    if (newCount == 0) {
+                        track.localPath?.let { path ->
+                            val f = File(path)
+                            if (f.exists()) f.delete()
+                        }
+                        trackDao.updateDownloadStatus(
+                            trackId = tId,
+                            status = DownloadStatus.NONE,
+                            localPath = null,
+                            fileSize = 0L,
+                            errorMessage = null,
+                            time = System.currentTimeMillis()
+                        )
+                        trackDao.decrementRefCount(tId)
+                    } else {
+                        trackDao.decrementRefCount(tId)
                     }
-                    trackDao.updateDownloadStatus(
-                        trackId = tId,
-                        status = DownloadStatus.NONE,
-                        localPath = null,
-                        fileSize = 0L,
-                        errorMessage = null,
-                        time = System.currentTimeMillis()
-                    )
-                    trackDao.updateTrack(track.copy(refCount = 0, localPath = null, downloadStatus = DownloadStatus.NONE, fileSize = 0L))
-                } else {
-                    trackDao.decrementRefCount(tId)
                 }
-            }
-            ptDao.deleteCrossRefsForPlaylist(playlistId)
-            _playlistStates.value = _playlistStates.value + (playlistId to PlaylistSyncState.NotDownloaded)
-            Log.d(TAG, "Toggled off downloads for playlist '$playlistTitle'. Garbage collected unreferenced tracks.")
-        } else {
-            // Toggled ON: Register cross-refs, increment ref_count for existing or queue downloads
-            songs.forEachIndexed { index, song ->
-                val trackKey = getTrackKey(song)
-                ptDao.insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, index))
+                ptDao.deleteCrossRefsForPlaylist(playlistId)
+                _playlistStates.update { it + (playlistId to PlaylistSyncState.NotDownloaded) }
+                Log.d(TAG, "Toggled off downloads for playlist '$playlistTitle'. Garbage collected unreferenced tracks.")
+            } else {
+                // Toggled ON: Register cross-refs, increment ref_count for existing or queue downloads
+                songs.forEachIndexed { index, song ->
+                    val trackKey = getTrackKey(song)
+                    ptDao.insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, index))
 
-                val existing = trackDao.getTrack(trackKey)
-                val isFileValid = existing?.localPath?.let { File(it).let { f -> f.exists() && f.length() > 0 } } == true
+                    val existing = trackDao.getTrack(trackKey)
+                    val isFileValid = existing?.localPath?.let { File(it).let { f -> f.exists() && f.length() > 0 } } == true
 
-                if (existing != null && existing.downloadStatus == DownloadStatus.COMPLETED && isFileValid) {
-                    trackDao.incrementRefCount(trackKey)
-                } else {
-                    val track = (existing ?: TrackEntity.fromSongModel(song, DownloadStatus.QUEUED, 1)).copy(
-                        downloadStatus = DownloadStatus.QUEUED,
-                        refCount = (existing?.refCount ?: 0) + 1
-                    )
-                    trackDao.insertTrack(track)
+                    if (existing != null && existing.downloadStatus == DownloadStatus.COMPLETED && isFileValid) {
+                        trackDao.incrementRefCount(trackKey)
+                    } else {
+                        if (existing != null) {
+                            trackDao.updateDownloadStatus(
+                                trackId = trackKey,
+                                status = DownloadStatus.QUEUED,
+                                localPath = existing.localPath,
+                                fileSize = existing.fileSize,
+                                errorMessage = null,
+                                time = System.currentTimeMillis()
+                            )
+                            trackDao.incrementRefCount(trackKey)
+                        } else {
+                            trackDao.insertTrack(TrackEntity.fromSongModel(song, DownloadStatus.QUEUED, 1))
+                        }
 
-                    // Enqueue background download
-                    DownloadWorker.enqueue(
-                        context = app,
-                        song = song,
-                        playlistId = playlistId,
-                        playlistName = playlistTitle
-                    )
+                        // Enqueue background download
+                        DownloadWorker.enqueue(
+                            context = app,
+                            song = song,
+                            playlistId = playlistId,
+                            playlistName = playlistTitle
+                        )
+                    }
                 }
+                refreshPlaylistStateLocked(app, playlistId)
             }
-            refreshPlaylistState(app, playlistId)
         }
     }
 
     // ── Track Download Callbacks from Engine / Worker ──
 
     suspend fun onTrackDownloadStarted(context: Context, song: SongsModel, playlistId: String = "") {
-        val db = AppDatabase.getInstance(context)
-        val trackKey = getTrackKey(song)
-        val existing = db.trackDao().getTrack(trackKey) ?: TrackEntity.fromSongModel(song, DownloadStatus.DOWNLOADING, 1)
-        db.trackDao().insertTrack(existing.copy(downloadStatus = DownloadStatus.DOWNLOADING))
-        if (playlistId.isNotBlank()) refreshPlaylistState(context, playlistId)
+        syncMutex.withLock {
+            val db = AppDatabase.getInstance(context)
+            val trackKey = getTrackKey(song)
+            val existing = db.trackDao().getTrack(trackKey)
+            if (existing != null) {
+                db.trackDao().updateDownloadStatus(
+                    trackId = trackKey,
+                    status = DownloadStatus.DOWNLOADING,
+                    localPath = existing.localPath,
+                    fileSize = existing.fileSize,
+                    errorMessage = null,
+                    time = System.currentTimeMillis()
+                )
+            } else {
+                db.trackDao().insertTrack(TrackEntity.fromSongModel(song, DownloadStatus.DOWNLOADING, 1))
+            }
+            if (playlistId.isNotBlank()) refreshPlaylistStateLocked(context, playlistId)
+        }
     }
 
     suspend fun onTrackDownloadCompleted(
@@ -254,23 +291,32 @@ object DownloadSyncManager {
         playlistId: String = "",
         playlistTitle: String = ""
     ) {
-        val db = AppDatabase.getInstance(context)
-        val trackKey = getTrackKey(song)
-        val existing = db.trackDao().getTrack(trackKey) ?: TrackEntity.fromSongModel(song, DownloadStatus.COMPLETED, 1)
+        syncMutex.withLock {
+            val db = AppDatabase.getInstance(context)
+            val trackKey = getTrackKey(song)
+            val existing = db.trackDao().getTrack(trackKey)
+            if (existing != null) {
+                db.trackDao().updateDownloadStatus(
+                    trackId = trackKey,
+                    status = DownloadStatus.COMPLETED,
+                    localPath = localFile.absolutePath,
+                    fileSize = localFile.length(),
+                    errorMessage = null,
+                    time = System.currentTimeMillis()
+                )
+            } else {
+                val newTrack = TrackEntity.fromSongModel(song, DownloadStatus.COMPLETED, 1).copy(
+                    localPath = localFile.absolutePath,
+                    fileSize = localFile.length(),
+                    downloadTimeMs = System.currentTimeMillis()
+                )
+                db.trackDao().insertTrack(newTrack)
+            }
 
-        db.trackDao().insertTrack(
-            existing.copy(
-                localPath = localFile.absolutePath,
-                downloadStatus = DownloadStatus.COMPLETED,
-                fileSize = localFile.length(),
-                downloadTimeMs = System.currentTimeMillis(),
-                errorMessage = null
-            )
-        )
-
-        if (playlistId.isNotBlank()) {
-            db.playlistTrackDao().insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
-            refreshPlaylistState(context, playlistId)
+            if (playlistId.isNotBlank()) {
+                db.playlistTrackDao().insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
+                refreshPlaylistStateLocked(context, playlistId)
+            }
         }
     }
 
@@ -280,32 +326,49 @@ object DownloadSyncManager {
         errorMessage: String,
         playlistId: String = ""
     ) {
-        val db = AppDatabase.getInstance(context)
-        val trackKey = getTrackKey(song)
-        val existing = db.trackDao().getTrack(trackKey) ?: TrackEntity.fromSongModel(song, DownloadStatus.FAILED, 1)
-        db.trackDao().insertTrack(
-            existing.copy(
-                downloadStatus = DownloadStatus.FAILED,
-                errorMessage = errorMessage
-            )
-        )
-        if (playlistId.isNotBlank()) refreshPlaylistState(context, playlistId)
+        syncMutex.withLock {
+            val db = AppDatabase.getInstance(context)
+            val trackKey = getTrackKey(song)
+            val existing = db.trackDao().getTrack(trackKey)
+            if (existing != null) {
+                db.trackDao().updateDownloadStatus(
+                    trackId = trackKey,
+                    status = DownloadStatus.FAILED,
+                    localPath = existing.localPath,
+                    fileSize = existing.fileSize,
+                    errorMessage = errorMessage,
+                    time = System.currentTimeMillis()
+                )
+            } else {
+                val newTrack = TrackEntity.fromSongModel(song, DownloadStatus.FAILED, 1).copy(
+                    errorMessage = errorMessage
+                )
+                db.trackDao().insertTrack(newTrack)
+            }
+            if (playlistId.isNotBlank()) refreshPlaylistStateLocked(context, playlistId)
+        }
     }
 
     // ── State Computation ──
 
     suspend fun refreshPlaylistState(context: Context, playlistId: String) = withContext(Dispatchers.IO) {
+        syncMutex.withLock {
+            refreshPlaylistStateLocked(context, playlistId)
+        }
+    }
+
+    private suspend fun refreshPlaylistStateLocked(context: Context, playlistId: String) {
         val db = AppDatabase.getInstance(context)
         val playlist = db.playlistDao().getPlaylist(playlistId)
         if (playlist == null || !playlist.isDownloadEnabled) {
-            _playlistStates.value = _playlistStates.value + (playlistId to PlaylistSyncState.NotDownloaded)
-            return@withContext
+            _playlistStates.update { it + (playlistId to PlaylistSyncState.NotDownloaded) }
+            return
         }
 
         val tracks = db.trackDao().getTracksForPlaylistSync(playlistId)
         if (tracks.isEmpty()) {
-            _playlistStates.value = _playlistStates.value + (playlistId to PlaylistSyncState.NotDownloaded)
-            return@withContext
+            _playlistStates.update { it + (playlistId to PlaylistSyncState.NotDownloaded) }
+            return
         }
 
         val total = tracks.size
@@ -323,7 +386,7 @@ object DownloadSyncManager {
             else -> PlaylistSyncState.NotDownloaded
         }
 
-        _playlistStates.value = _playlistStates.value + (playlistId to newState)
+        _playlistStates.update { it + (playlistId to newState) }
     }
 
     fun observePlaylistSyncState(playlistId: String): Flow<PlaylistSyncState> {
