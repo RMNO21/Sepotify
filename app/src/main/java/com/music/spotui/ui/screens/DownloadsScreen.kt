@@ -31,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -136,7 +137,7 @@ fun DownloadsScreen(navController: NavController) {
                         ) {
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_settings),
-                                contentDescription = "Manage Storage & Cache",
+                                contentDescription = stringResource(R.string.downloads_manage_storage),
                                 tint = Color.White,
                                 modifier = Modifier.size(22.dp),
                             )
@@ -184,14 +185,14 @@ fun DownloadsScreen(navController: NavController) {
                     Spacer(modifier = Modifier.padding(5.dp))
                     Text(
                         modifier = Modifier.padding(20.dp, 5.dp, 0.dp, 0.dp),
-                        text = "Downloaded",
+                        text = stringResource(R.string.downloads_title),
                         color = Color.White,
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         modifier = Modifier.padding(20.dp, 4.dp, 20.dp, 0.dp),
-                        text = "${songs.size} songs • available offline",
+                        text = stringResource(R.string.downloads_available_offline, songs.size),
                         color = Color.Gray,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -205,7 +206,7 @@ fun DownloadsScreen(navController: NavController) {
                         horizontalArrangement = Arrangement.End,
                     ) {
                         Text(
-                            text = "Clear all",
+                            text = stringResource(R.string.downloads_clear_all),
                             color = Color(0xFFE57373),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,

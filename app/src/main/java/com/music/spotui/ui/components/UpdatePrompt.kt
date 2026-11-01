@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.music.spotui.R
 import com.music.spotui.data.update.UpdateChecker
 
 /**
@@ -31,20 +33,20 @@ fun UpdatePrompt() {
     val info = update ?: return
     AlertDialog(
         onDismissRequest = { update = null },
-        title = { Text("Update available") },
-        text = { Text("spotui ${info.version} is available. You're on an older version — upgrade to get the latest fixes and features.") },
+        title = { Text(stringResource(R.string.update_available_title)) },
+        text = { Text(stringResource(R.string.update_available_message, info.version)) },
         confirmButton = {
             TextButton(onClick = {
                 com.music.spotui.data.update.AppUpdateInstaller.startUpdate(context, info)
                 update = null
-            }) { Text("Upgrade") }
+            }) { Text(stringResource(R.string.update_action_upgrade)) }
         },
         dismissButton = {
             TextButton(onClick = {
                 UpdateChecker.skipRelease(context, info)
                 update = null
-            }) { Text("Don't show again") }
-            TextButton(onClick = { update = null }) { Text("Dismiss") }
+            }) { Text(stringResource(R.string.update_action_skip)) }
+            TextButton(onClick = { update = null }) { Text(stringResource(R.string.update_action_dismiss)) }
         },
     )
 }

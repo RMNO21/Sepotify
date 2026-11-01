@@ -127,7 +127,7 @@ fun MainBottomNavigation(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "Offline • Only downloaded tracks available",
+                                text = androidx.compose.ui.res.stringResource(com.music.spotui.R.string.offline_indicator_banner),
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold
