@@ -1,1 +1,130 @@
+<resources>
+    <!-- App Details -->
+    <string name="app_name">Sepotify</string>
+
+    <!-- Navigation & Core Routes -->
+    <string name="nav_home">Accueil</string>
+    <string name="nav_search">Rechercher</string>
+    <string name="nav_library">Bibliothèque</string>
+    <string name="nav_album">Album</string>
+    <string name="nav_player">Lecteur</string>
+    <string name="nav_artist">Artiste</string>
+    <string name="nav_playlist">Playlist</string>
+    <string name="nav_queue">File d\'attente</string>
+    <string name="nav_liked_songs">Titres likés</string>
+    <string name="nav_downloads">Téléchargements</string>
+    <string name="nav_history">Historique</string>
+    <string name="nav_settings">Paramètres</string>
+
+    <!-- Network & Connectivity -->
+    <string name="offline_indicator_banner">Hors ligne • Seuls les titres téléchargés sont disponibles</string>
+    <string name="offline_mode">Mode hors ligne</string>
+    <string name="offline_badge">Hors ligne</string>
+    <string name="no_internet_connection">Pas de connexion Internet</string>
+
+    <!-- Home Screen -->
+    <string name="filter_all">Tout</string>
+    <string name="filter_music">Musique</string>
+    <string name="filter_podcasts">Podcasts</string>
+    <string name="filter_audiobooks">Livres audio</string>
+    <string name="home_shortcuts">Raccourcis</string>
+
+    <!-- Search Screen -->
+    <string name="search_title">Rechercher</string>
+    <string name="search_placeholder">Que souhaitez-vous écouter ?</string>
+    <string name="search_clear">Effacer la recherche</string>
+    <string name="search_recent_queries">Recherches récentes</string>
+    <string name="search_browse_all">Tout parcourir</string>
+    <string name="search_category_music">Musique</string>
+    <string name="search_category_podcasts">Podcasts</string>
+    <string name="search_category_made_for_you">Conçu pour vous</string>
+    <string name="search_category_new_releases">Nouveautés</string>
+    <string name="search_category_pop">Pop</string>
+    <string name="search_category_hip_hop">Hip-Hop</string>
+    <string name="search_category_rock">Rock</string>
+    <string name="search_category_latin">Latin</string>
+    <string name="search_category_country">Country</string>
+    <string name="search_category_rnb">R&amp;B</string>
+    <string name="search_category_kpop">K-Pop</string>
+    <string name="search_category_indie">Indé</string>
+    <string name="search_category_dance_electronic">Dance/Électronique</string>
+    <string name="search_category_metal">Metal</string>
+    <string name="search_category_chill">Détente</string>
+    <string name="search_category_charts">Classements</string>
+    <string name="search_category_workout">Sport</string>
+    <string name="search_category_jazz">Jazz</string>
+    <string name="search_item_song">Titre</string>
+    <string name="search_item_artist">Artiste</string>
+    <string name="search_item_album">Album</string>
+    <string name="search_item_playlist">Playlist</string>
+    <string name="search_item_podcast">Podcast</string>
+
+    <!-- Downloads Screen -->
+    <string name="downloads_title">Téléchargés</string>
+    <string name="downloads_available_offline">%1$d titres • disponibles hors ligne</string>
+    <string name="downloads_clear_all">Tout effacer</string>
+    <string name="downloads_manage_storage">Gérer le stockage et le cache</string>
+    <string name="downloads_empty">Aucun titre téléchargé pour le moment</string>
+
+    <!-- Track & Song Context Menu -->
+    <string name="menu_play_next">Lire ensuite</string>
+    <string name="menu_add_to_queue">Ajouter à la file d\'attente</string>
+    <string name="menu_add_to_playlist">Ajouter à une playlist</string>
+    <string name="menu_add_to_liked">Ajouter aux titres likés</string>
+    <string name="menu_remove_from_liked">Retirer des titres likés</string>
+    <string name="menu_download">Télécharger</string>
+    <string name="menu_downloading">Téléchargement…</string>
+    <string name="menu_downloading_progress">Téléchargement… %1$d%%</string>
+    <string name="menu_downloaded_remove">Téléchargé — supprimer</string>
+    <string name="menu_export_to_music">Exporter vers Musique</string>
+    <string name="menu_go_to_artist">Accéder à l\'artiste</string>
+    <string name="menu_go_to_album">Accéder à l\'album</string>
+    <string name="menu_share">Partager</string>
+
+    <!-- Playlist & Saved In Sheet -->
+    <string name="saved_in_title">Enregistré dans</string>
+    <string name="new_playlist_action">Nouvelle playlist</string>
+    <string name="playlist_name_placeholder">Nom de la playlist</string>
+    <string name="default_playlist_name">Ma playlist</string>
+
+    <!-- Settings Screen -->
+    <string name="settings_title">Paramètres</string>
+    <string name="settings_audio_quality">Qualité audio</string>
+    <string name="settings_wifi_quality">Diffusion en streaming via Wi-Fi</string>
+    <string name="settings_cellular_quality">Diffusion en streaming via les données mobiles</string>
+    <string name="settings_download_quality">Qualité de téléchargement</string>
+    <string name="settings_lossless_note_deezer">Sans perte (Lossless) : Tidal (gratuit) + Deezer %1$s — vrai FLAC</string>
+    <string name="settings_lossless_note_community">Sans perte (Lossless) : FLAC communautaire Tidal (aucune connexion requise) — ou ajoutez Deezer HiFi ci-dessous</string>
+    <string name="settings_matching">Correspondance</string>
+    <string name="settings_video_fallback">Autoriser la solution de repli vidéo</string>
+    <string name="settings_video_fallback_subtitle">Utiliser les vidéos YouTube classiques uniquement si les résultats musicaux échouent</string>
+    <string name="settings_crossfade">Enchaînement (Crossfade)</string>
+    <string name="settings_crossfade_subtitle">Fusionner la fin d\'un titre avec le début du suivant</string>
+    <string name="settings_crossfade_off">Désactivé</string>
+    <string name="settings_music_source">Source musicale</string>
+    <string name="settings_deezer_account">Compte Deezer</string>
+    <string name="settings_spotify_session">Session Spotify</string>
+    <string name="settings_check_updates">Rechercher des mises à jour</string>
+
+    <!-- In-App Update Dialog -->
+    <string name="update_available_title">Mise à jour disponible</string>
+    <string name="update_available_message">La version Sepotify %1$s est disponible. Vous utilisez une version obsolète — effectuez la mise à niveau pour profiter des derniers correctifs et fonctionnalités.</string>
+    <string name="update_action_upgrade">Mettre à niveau</string>
+    <string name="update_action_skip">Ne plus afficher</string>
+    <string name="update_action_dismiss">Ignorer</string>
+
+    <!-- Common UI Labels & Accessibility -->
+    <string name="action_back">Retour</string>
+    <string name="action_close">Fermer</string>
+    <string name="action_cancel">Annuler</string>
+    <string name="action_save">Enregistrer</string>
+    <string name="action_done">Terminé</string>
+    <string name="action_confirm">Confirmer</string>
+    <string name="action_remove">Retirer</string>
+    <string name="action_delete">Supprimer</string>
+    <string name="action_retry">Réessayer</string>
+    <string name="action_like">Liker</string>
+    <string name="action_options">Options</string>
+    <string name="action_profile">Profil</string>
+</resources>
 
