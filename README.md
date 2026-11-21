@@ -18,8 +18,12 @@
 
 <p align="center">
   <a href="https://github.com/RMNO21/Sepotify/releases/latest">
-    <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_LATEST_APK-v2.1.1-1DB954?style=for-the-badge&labelColor=000000" height="40" alt="Download APK" />
+    <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_LATEST_APK-v2.1.3-1DB954?style=for-the-badge&labelColor=000000" height="42" alt="Download Latest APK" />
   </a>
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-player.png" alt="Sepotify Player Interface" width="340" />
 </p>
 
 ---
