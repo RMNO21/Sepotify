@@ -96,42 +96,63 @@ object DeltaPlaylistSyncEngine {
 
         // 4. Batch Process added tracks with bounded concurrency (max 4 parallel workers)
         val semaphore = Semaphore(MAX_CONCURRENT_WORKERS)
-        val addedTracks = remoteTracks.filter { DownloadSyncManager.getTrackKey(it) in addedTrackIds }
 
         coroutineScope {
-            val jobs = addedTracks.mapIndexed { index, song ->
+            val jobs = remoteTracks.mapIndexed { absoluteIndex, song ->
                 async {
-                    semaphore.withPermit {
-                        val trackKey = DownloadSyncManager.getTrackKey(song)
-                        // Insert track entity if not present
-                        val trackEntity = TrackEntity(
-                            trackId = trackKey,
-                            songId = song.id,
-                            title = song.title,
-                            singer = song.singer,
-                            album = song.album,
-                            coverUri = song.coverUri,
-                            spotifyTrackId = song.spotifyTrackId,
-                            downloadStatus = DownloadStatus.QUEUED
-                        )
-                        trackDao.insertTrack(trackEntity)
+                    val trackKey = DownloadSyncManager.getTrackKey(song)
 
-                        // Insert cross-ref
-                        crossRefDao.insertCrossRef(
-                            PlaylistTrackCrossRef(
-                                playlistId = playlistId,
-                                trackId = trackKey,
-                                sortOrder = index
-                            )
-                        )
+                    if (trackKey in addedTrackIds) {
+                        semaphore.withPermit {
+                            val existingTrack = trackDao.getTrack(trackKey)
+                            val isFileValid = existingTrack?.localPath?.let { java.io.File(it).let { f -> f.exists() && f.length() > 0 } } == true
 
-                        // Enqueue background offline download
-                        if (updatedPlaylist.isDownloadEnabled) {
-                            DownloadWorker.enqueue(
-                                context = context,
-                                song = song,
-                                playlistId = playlistId,
-                                playlistName = playlistTitle
+                            if (existingTrack != null && existingTrack.downloadStatus == DownloadStatus.COMPLETED && isFileValid) {
+                                trackDao.incrementRefCount(trackKey)
+                            } else {
+                                if (existingTrack != null) {
+                                    trackDao.updateDownloadStatus(
+                                        trackId = trackKey,
+                                        status = DownloadStatus.QUEUED,
+                                        localPath = existingTrack.localPath,
+                                        fileSize = existingTrack.fileSize,
+                                        errorMessage = null,
+                                        time = System.currentTimeMillis()
+                                    )
+                                    trackDao.incrementRefCount(trackKey)
+                                } else {
+                                    val trackEntity = TrackEntity(
+                                        trackId = trackKey,
+                                        songId = song.id,
+                                        title = song.title,
+                                        singer = song.singer,
+                                        album = song.album,
+                                        coverUri = song.coverUri,
+                                        spotifyTrackId = song.spotifyTrackId,
+                                        downloadStatus = DownloadStatus.QUEUED,
+                                        refCount = 1
+                                    )
+                                    trackDao.insertTrack(trackEntity)
+                                }
+
+                                // Enqueue background offline download
+                                if (updatedPlaylist.isDownloadEnabled) {
+                                    DownloadWorker.enqueue(
+                                        context = context,
+                                        song = song,
+                                        playlistId = playlistId,
+                                        playlistName = playlistTitle
+                                    )
+                                }
+                            }
+
+                            // Insert cross-ref
+                            crossRefDao.insertCrossRef(
+                                PlaylistTrackCrossRef(
+                                    playlistId = playlistId,
+                                    trackId = trackKey,
+                                    sortOrder = absoluteIndex
+                                )
                             )
                         }
                     }

@@ -185,12 +185,14 @@ object DownloadSyncManager {
             val trackDao = db.trackDao()
             val ptDao = db.playlistTrackDao()
 
+            val existingPlaylist = playlistDao.getPlaylist(playlistId)
             val playlist = PlaylistEntity(
                 playlistId = playlistId,
                 title = playlistTitle,
                 coverUri = coverUri,
                 isDownloadEnabled = enabled,
-                lastSyncTimestamp = System.currentTimeMillis()
+                lastSyncTimestamp = System.currentTimeMillis(),
+                snapshotId = existingPlaylist?.snapshotId ?: ""
             )
             playlistDao.insertPlaylist(playlist)
 
@@ -314,7 +316,10 @@ object DownloadSyncManager {
             }
 
             if (playlistId.isNotBlank()) {
-                db.playlistTrackDao().insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
+                val existingCrossRef = db.playlistTrackDao().getCrossRef(playlistId, trackKey)
+                if (existingCrossRef == null) {
+                    db.playlistTrackDao().insertCrossRef(PlaylistTrackCrossRef(playlistId, trackKey, 0))
+                }
                 refreshPlaylistStateLocked(context, playlistId)
             }
         }

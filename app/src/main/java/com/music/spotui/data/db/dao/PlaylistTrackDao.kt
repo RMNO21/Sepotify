@@ -15,6 +15,9 @@ interface PlaylistTrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCrossRefs(crossRefs: List<PlaylistTrackCrossRef>): List<Long>
 
+    @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId AND track_id = :trackId")
+    suspend fun getCrossRef(playlistId: String, trackId: String): PlaylistTrackCrossRef?
+
     @Query("DELETE FROM playlist_tracks WHERE playlist_id = :playlistId AND track_id = :trackId")
     suspend fun deleteCrossRef(playlistId: String, trackId: String): Int
 
